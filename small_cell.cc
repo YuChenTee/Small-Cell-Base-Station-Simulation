@@ -29,7 +29,7 @@ void PrintEnbMeasurements(NetDeviceContainer& enbDevs) {
         Ptr<LteEnbNetDevice> enbDevice = DynamicCast<LteEnbNetDevice>(enbDevs.Get(i));
         Ptr<LteEnbPhy> enbPhy = enbDevice->GetPhy();
         double txPowerDbm = enbPhy->GetTxPower();
-        std::cout << "eNB " << i << " transmission power: " << txPowerDbm << " dBm" << std::endl;
+        std::cout << "eNB " << i+1 << " transmission power: " << txPowerDbm << " dBm" << std::endl;
     }
 }
 
@@ -268,53 +268,28 @@ void WaitForSetupAndTriggerHandover(Ptr<LteHelper> lteHelper, Ptr<PointToPointEp
     }
 }
 
-void DiagnoseRBAllocation(Ptr<LteEnbNetDevice> enbDevice) {
-    Ptr<LteEnbPhy> enbPhy = enbDevice->GetPhy();
-    std::vector<int> activeSubChannels = enbPhy->GetDownlinkSubChannels();
-
-    // Print detailed information about RB allocation
-    std::cout << "Total Active RBs: " << activeSubChannels.size() << std::endl;
-    std::cout << "RB Indices in Use: ";
-    for (int rb : activeSubChannels) {
-        std::cout << rb << " ";
-    }
-    std::cout << std::endl;
-}
-
-void CalculatePBU(Ptr<LteEnbNetDevice> enbDevice) {
-    // Check if the eNB device is valid
+void CalculateConnectedDevices(Ptr<LteEnbNetDevice> enbDevice, NetDeviceContainer ueDevs) {
     if (!enbDevice) {
         std::cerr << "[ERROR] Invalid eNB device!" << std::endl;
         return;
     }
 
-    // Get the PHY layer from the eNB device
-    Ptr<LteEnbPhy> enbPhy = enbDevice->GetPhy();
-    if (!enbPhy) {
-        std::cerr << "[ERROR] eNB device has no PHY layer!" << std::endl;
-        return;
+    // Manually count connected UEs
+    uint16_t connectedUes = 0;
+    for (uint32_t i = 0; i < ueDevs.GetN(); ++i) {
+        Ptr<LteUeNetDevice> ueDevice = DynamicCast<LteUeNetDevice>(ueDevs.Get(i));
+        if (ueDevice && ueDevice->GetRrc()->GetCellId() == enbDevice->GetCellId()) {
+            connectedUes++;
+        }
     }
 
-    // Get the downlink bandwidth (in terms of PRBs)
-    uint16_t totalPrbs = enbDevice->GetDlBandwidth();
-    if (totalPrbs == 0) {
-        std::cerr << "[ERROR] Total PRBs is zero, check eNB configuration!" << std::endl;
-        return;
-    }
-
-    // Get the list of active RBs
-    std::vector<int> activeSubChannels = enbPhy->GetDownlinkSubChannels();
-    uint16_t allocatedPrbs = activeSubChannels.size(); // Number of active PRBs
-
-    // Calculate utilization
-    double utilization = (double)allocatedPrbs / totalPrbs * 100.0;
-
-    // Print PBU
-    std::cout << "  Total PRBs in DL: " << totalPrbs << std::endl;
-    std::cout << "  Allocated PRBs: " << allocatedPrbs << std::endl;
-    std::cout << "  Physical Block Utilization: " << utilization << "%" << std::endl;
+    // Print the number of connected devices
+    std::cout << "Number of connected devices for eNB " << enbDevice->GetCellId() << ":" << std::endl;
+    std::cout << "  Connected UEs: " << connectedUes << std::endl;
     std::cout << std::endl;
 
+    // Schedule the next calculation
+    Simulator::Schedule(Seconds(1.0), &CalculateConnectedDevices, enbDevice, ueDevs);
 }
 
 void PrintUeConnectionStatus(NetDeviceContainer ueDevs, NetDeviceContainer enbDevs, Ipv4InterfaceContainer ueIpIface) {
@@ -358,9 +333,6 @@ void PrintUeConnectionStatus(NetDeviceContainer ueDevs, NetDeviceContainer enbDe
             double rsrp = CalculateRsrp(ueDevice->GetNode(), connectedEnb->GetNode(), connectedEnb->GetPhy(0)->GetTxPower(), 3.5); // LTE path loss exponent
             std::cout << "  RSRP: " << rsrp << " dBm" << std::endl;
         }
-        // calculatePBU
-        DiagnoseRBAllocation(connectedEnb);
-        CalculatePBU(connectedEnb);
     }
 
     // Periodic check
@@ -445,8 +417,9 @@ int main(int argc, char *argv[]) {
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
     Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
     lteHelper->SetEpcHelper(epcHelper);
+    
 
-    // Set default scheduler (To assign resources (PRBs) to UEs)
+    // Set default scheduler (To assign resSurces (PRBs) to UEs)
     lteHelper->SetSchedulerType("ns3::RrFfMacScheduler");
     // lteHelper->SetSchedulerType("ns3::TdTbfqFfMacScheduler"); // Time Domain Transmission
 
@@ -496,10 +469,6 @@ int main(int argc, char *argv[]) {
     NetDeviceContainer enbDevs = lteHelper->InstallEnbDevice(enbNodes);
     NetDeviceContainer ueDevs = lteHelper->InstallUeDevice(ueNodes);
 
-    // Start monitoring for the first eNB (or you can monitor all eNBs)
-    Ptr<LteEnbNetDevice> firstEnb = DynamicCast<LteEnbNetDevice>(enbDevs.Get(0));
-    Simulator::Schedule(Seconds(1.0), & CalculatePBU, firstEnb);
-
     // Set random transmission power for each eNB
     for (uint32_t i = 0; i < enbDevs.GetN(); ++i) {
         Ptr<LteEnbNetDevice> enb = DynamicCast<LteEnbNetDevice>(enbDevs.Get(i));
@@ -531,8 +500,8 @@ int main(int argc, char *argv[]) {
     lteHelper->AttachToClosestEnb(ueDevs, enbDevs);
     std::cout << "UEs attached to the closest eNB." << std::endl;
 
-    // Setup and configure bearers
-    // Simulator::Schedule(Seconds(0.2), [&]() {
+    //Setup and configure bearers
+    // Simulator::Schedule(Seconds(0.5), [&]() {
     //     EpsBearer bearer(EpsBearer::NGBR_VIDEO_TCP_DEFAULT);
     //     lteHelper->ActivateDataRadioBearer(ueDevs, bearer);
     // });
@@ -541,13 +510,18 @@ int main(int argc, char *argv[]) {
     PrintEnbMeasurements(enbDevs);
     PrintConnectedEnbRsrp(enbDevs, ueDevs, pathLossExponent, lteHelper);
 
-    lteHelper->EnableMacTraces();
-    lteHelper->EnablePhyTraces();
-    lteHelper->EnableRlcTraces();
-
     // Setup applications
     uint16_t serverPort = 8080;
     UdpServerHelper server(serverPort);
+    // //install UDP server on all UES
+    // for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    //     ApplicationContainer serverApp = server.Install(ueNodes.Get(i));
+    //     serverApp.Start(Seconds(0.0));
+    //     serverApp.Stop(Seconds(simTime));
+    //     std::cout << "Installing UDP server on UE " << i << " (IP: " << ueIpIface.GetAddress(i) 
+    //               << ") port " << serverPort << std::endl;
+    // }
+
     ApplicationContainer serverApp = server.Install(ueNodes.Get(0));
     
     std::cout << "Installing UDP server on UE " << 0 << " (IP: " << ueIpIface.GetAddress(0) 
@@ -566,8 +540,8 @@ int main(int argc, char *argv[]) {
         ApplicationContainer tempApp = client.Install(ueNodes.Get(i));
         clientApps.Add(tempApp);
         
-        std::cout << "Installing UDP client on UE " << i 
-                  << " sending to UE0 (" << ueIpIface.GetAddress(0) << ":" << serverPort << ")" << std::endl;
+        std :: cout << "Installing UDP client on UE " << i << " (IP: " << ueIpIface.GetAddress(i) 
+                    << ") to send to UE " << i-1 << std::endl;
     }
     clientApps.Start(Seconds(1.0));
     clientApps.Stop(Seconds(simTime));
@@ -576,6 +550,7 @@ int main(int argc, char *argv[]) {
     Ptr<FlowMonitor> flowMonitor;
     FlowMonitorHelper flowHelper;
     flowMonitor = flowHelper.InstallAll();
+    flowHelper.SerializeToXmlFile("lte-simulation-flow.xml", true, true);
 
     // After the simulation, calculate and print the throughput
     flowMonitor->CheckForLostPackets();
@@ -586,24 +561,47 @@ int main(int argc, char *argv[]) {
 
     WaitForSetupAndTriggerHandover(lteHelper, epcHelper, ueNodes, enbDevs, ueDevs, pathLossExponent);
 
-    // In your main() function, after installing mobility and before Simulator::Run()
-    // Create the animation XML file
-    AnimationInterface anim("lte-simulation.xml");
-    // Enable packet metadata to see data flow
-    anim.EnablePacketMetadata(true);
+    //calculatePBU
+    for (uint32_t i = 0; i < enbDevs.GetN(); ++i) {
+        Ptr<LteEnbNetDevice> enbDevice = DynamicCast<LteEnbNetDevice>(enbDevs.Get(i));
+        Simulator::Schedule(Seconds(1.0), &CalculateConnectedDevices, enbDevice, ueDevs);
+    }
 
-    // Optional: Update packet metadata size for better visibility
-    anim.SetMaxPktsPerTraceFile(100000);
+    // In your main() function, after installing mobility and before Simulator::Run()
+    // Enable packet metadata to see data flow
+    // Create the animation XML file
+
+    lteHelper->EnableDlPhyTraces();
+
+    // Enable packet tracing
+    lteHelper->EnablePhyTraces();
+    lteHelper->EnableMacTraces();
+    lteHelper->EnableRlcTraces();
+    lteHelper->EnablePdcpTraces();
+    AnimationInterface anim("lte-simulation.xml");
+
+    anim.EnablePacketMetadata(true);
     
+    // Set node colors and descriptions
     for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        anim.UpdateNodeDescription(ueNodes.Get(i), "UE-" + std::to_string(i)); // Assign names
-        anim.UpdateNodeColor(ueNodes.Get(i), 0, 0, 255); // Set UE color (blue)
+        anim.UpdateNodeDescription(ueNodes.Get(i), "UE-" + std::to_string(i));
+        anim.UpdateNodeColor(ueNodes.Get(i), 0, 0, 255); // Blue for UEs
+        anim.UpdateNodeSize(i, 10, 10); // Make UEs visible
     }
 
     for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
-        anim.UpdateNodeDescription(enbNodes.Get(i), "SBS-" + std::to_string(i)); // Assign names
-        anim.UpdateNodeColor(enbNodes.Get(i), 255, 0, 0); // Set eNB color (red)
+        anim.UpdateNodeDescription(enbNodes.Get(i), "SBS-" + std::to_string(i+1));
+        anim.UpdateNodeColor(enbNodes.Get(i), 255, 0, 0); // Red for SBS
+        anim.UpdateNodeSize(i + ueNodes.GetN(), 20, 20); // Make SBS bigger than UEs
     }
+
+    // Set update rate for smoother animation
+    anim.SetMobilityPollInterval(Seconds(0.01));
+    
+    // Enable packet metadata with custom settings
+    anim.EnablePacketMetadata(true);
+    anim.SetMaxPktsPerTraceFile(1000000);
+
 
     Simulator::Stop(Seconds(simTime));
     Simulator::Run();
