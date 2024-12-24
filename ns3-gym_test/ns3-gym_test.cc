@@ -15,6 +15,12 @@
 
 using namespace ns3;
 
+double minPowerDbm = 10.0;
+double maxPowerDbm = 40.0;
+std::vector<double> cioValues; // Store CIO values for each SBS
+double minCio = -10.0; // Minimum CIO value in dB
+double maxCio = 10.0; // Maximum CIO value in dB
+
 double CalculateRsrp(Ptr<Node> ueNode, Ptr<Node> gnbNode, double txPowerDbm, double pathLossExponent) {
     Ptr<MobilityModel> ueMobility = ueNode->GetObject<MobilityModel>();
     Ptr<MobilityModel> gnbMobility = gnbNode->GetObject<MobilityModel>();
@@ -74,10 +80,6 @@ void checkUEPosition(NodeContainer& ueNodes){
 }
 
 // Randomize CIO values for each SBS
-std::vector<double> cioValues; // Store CIO values for each SBS
-double minCio = -10.0; // Minimum CIO value in dB
-double maxCio = 10.0; // Maximum CIO value in dB
-
 void RandomizeCioValues(int numEnb, double minCio, double maxCio) {
     cioValues.clear();
     for (int i = 0; i < numEnb; ++i) {
@@ -437,16 +439,16 @@ private:
   std::vector<double> m_throughput;
 
   // Reward weights
-  const double m_w1 = 0.4; // Energy efficiency weight
+  const double m_w1 = 0.5; // Energy efficiency weight
   const double m_w2 = 0.3; // QoS weight
-  const double m_w3 = 0.3; // PRB deviation weight
+  const double m_w3 = 0.2; // PRB deviation weight
 
   // Action bounds
   const double m_maxPowerAdjustment = 3.0;  // dB
   const double m_maxCioAdjustment = 2.0;    // dB
 
   // Episode parameters
-  const uint32_t m_maxSteps = 10;
+  const uint32_t m_maxSteps = 30;
   uint32_t m_currentStep;
 };
 
@@ -533,15 +535,20 @@ Ptr<OpenGymDataContainer> LteGymEnv::GetObservation()
   return box;
 }
 
-float LteGymEnv::GetReward()
-{
-  double r_ee = CalculateEnergyEfficiency();
-  double r_qos = CalculateQoSMetric();
-  double r_prb = CalculatePrbDeviation();
-
-  std :: cout << "Reward: " << m_w1 * r_ee + m_w2 * r_qos + m_w3 * r_prb << std::endl;
-  
-  return m_w1 * r_ee + m_w2 * r_qos + m_w3 * r_prb;
+float LteGymEnv::GetReward() {
+    double r_ee = CalculateEnergyEfficiency()*100;
+    // Convert RSRP to positive metric where higher is better
+    double r_qos = (CalculateQoSMetric() + 100)/100; // Assuming RSRP in dBm
+    // Convert PRB deviation to efficiency (1 - normalized_deviation)
+    double r_prb = 1 - CalculatePrbDeviation()/100; // Assuming percentages
+    
+    // Linear combination with weights
+    double reward = (m_w1 * r_ee + m_w2 * r_qos + m_w3 * r_prb) / (m_w1 + m_w2 + m_w3);
+    
+    std::cout << "Reward components: EE=" << r_ee << " QoS=" << r_qos 
+              << " PRB=" << r_prb << " Total=" << reward << std::endl;
+    
+    return reward;
 }
 
 bool LteGymEnv::GetGameOver()
@@ -570,16 +577,14 @@ bool LteGymEnv::ExecuteActions(Ptr<OpenGymDataContainer> action)
     Ptr<LteEnbNetDevice> enb = DynamicCast<LteEnbNetDevice>(m_enbDevs.Get(i));
     std :: cout << "Power Adjustment: " << powerAdj << std::endl;
     double currentPower = enb->GetPhy()->GetTxPower();
-    enb->GetPhy()->SetTxPower(currentPower + powerAdj);
+    double targetPower = std::max(minPowerDbm, std::min(maxPowerDbm, currentPower + powerAdj)); // Clamp to [10, 40]
+    enb->GetPhy()->SetTxPower(targetPower);
     
     // Get CIO adjustment
     double cioAdj = box->GetValue(i * 2 + 1);
     std :: cout << "CIO Adjustment: " << cioAdj << std::endl;
     cioValues[i] += cioAdj;
-    cioValues[i] = std::max(-10.0, std::min(10.0, cioValues[i])); // Clamp to [-10, 10]
-
-    std :: cout << "Power Adjustment: " << powerAdj << std::endl;
-    std :: cout << "CIO Adjustment: " << cioAdj << std::endl;
+    cioValues[i] = std::max(minCio, std::min(maxCio, cioValues[i])); // Clamp to [-10, 10]
   }
 
   std :: cout << "Actions: " << action << std::endl;
@@ -607,27 +612,29 @@ double LteGymEnv::CalculatePrbUtilization(Ptr<LteEnbNetDevice> enbDevice)
     }
 
     // Manually count connected UEs
-    uint16_t connectedUes = 0;
+    float connectedUes = 0;
     for (uint32_t i = 0; i < m_ueDevs.GetN(); ++i) {
         Ptr<LteUeNetDevice> ueDevice = DynamicCast<LteUeNetDevice>(m_ueDevs.Get(i));
         if (ueDevice && ueDevice->GetRrc()->GetCellId() == enbDevice->GetCellId()) {
             connectedUes++;
         }
     }
-    return connectedUes;
+
+    float prbUtilization = (connectedUes / m_ueDevs.GetN()) * 100;
+    return prbUtilization;
 }
 
 double LteGymEnv::CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb)
 {
-    static std::map<uint32_t, std::pair<double, uint64_t>> lastMeasurements; // cellId -> {time, bytes}
+    static std::map<uint32_t, std::pair<double, uint64_t>> lastMeasurements;
     double currentTime = Simulator::Now().GetSeconds();
     uint16_t cellId = enb->GetCellId();
     
-    // Get all flow statistics
+    // Get flow statistics
     std::map<FlowId, FlowMonitor::FlowStats> stats = m_flowMonitor->GetFlowStats();
-    uint64_t totalBytes = 0;
+    uint64_t currentTotalBytes = 0;
     
-    // Get list of UE IP addresses connected to this eNB
+    // Get connected UE IPs
     std::vector<Ipv4Address> connectedUeIps;
     for (uint32_t i = 0; i < m_ueDevs.GetN(); ++i) {
         Ptr<LteUeNetDevice> ueDevice = DynamicCast<LteUeNetDevice>(m_ueDevs.Get(i));
@@ -636,38 +643,39 @@ double LteGymEnv::CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb)
         }
     }
     
-    // Sum up bytes for all flows involving UEs connected to this eNB
+    // Calculate current total bytes
     for (const auto& flow : stats) {
         Ipv4FlowClassifier::FiveTuple t = m_classifier->FindFlow(flow.first);
         
-        // Check if either source or destination is one of our connected UEs
-        bool isEnbFlow = false;
         for (const auto& ueIp : connectedUeIps) {
             if (t.sourceAddress == ueIp || t.destinationAddress == ueIp) {
-                isEnbFlow = true;
+                currentTotalBytes += flow.second.rxBytes;
                 break;
             }
-        }
-        
-        if (isEnbFlow) {
-            totalBytes += flow.second.rxBytes;
         }
     }
     
     // Calculate throughput
     double throughput = 0.0;
-    if (lastMeasurements.find(cellId) != lastMeasurements.end()) {
-        double timeDelta = currentTime - lastMeasurements[cellId].first;
-        uint64_t bytesDelta = totalBytes - lastMeasurements[cellId].second;
-        
+    auto lastMeasurement = lastMeasurements.find(cellId);
+    
+    if (lastMeasurement != lastMeasurements.end()) {
+        double timeDelta = currentTime - lastMeasurement->second.first;
         if (timeDelta > 0) {
-            // Convert to Mbps
-            throughput = (bytesDelta * 8.0) / (timeDelta * 1e6);
+            uint64_t bytesDelta = currentTotalBytes - lastMeasurement->second.second;
+            throughput = (bytesDelta * 8.0) / (timeDelta * 1e6); // Convert to Mbps
         }
     }
     
     // Update last measurements
-    lastMeasurements[cellId] = std::make_pair(currentTime, totalBytes);
+    lastMeasurements[cellId] = std::make_pair(currentTime, currentTotalBytes);
+    
+    // Add safety check for unreasonable values
+    if (throughput > 1000) { // 1000 Mbps as a reasonable maximum
+        std::cout << "Warning: Unusually high throughput detected for cell " << cellId 
+                  << ": " << throughput << " Mbps" << std::endl;
+        throughput = 0.0; // Reset to 0 or last known good value
+    }
     
     return throughput;
 }
@@ -766,8 +774,6 @@ int main(int argc, char *argv[]) {
     double simTime = 60;
     int numEnb = 10;  
     int numUes = 10;
-    double minPowerDbm = 10.0;
-    double maxPowerDbm = 40.0;
     double minSpeed = 1.0;
     double maxSpeed = 3.0;
     double pathLossExponent = 3.5;
@@ -941,29 +947,29 @@ int main(int argc, char *argv[]) {
     // Enable packet metadata to see data flow
     // Create the animation XML file
 
-    lteHelper->EnableDlPhyTraces();
+    // lteHelper->EnableDlPhyTraces();
 
-    // Enable packet tracing
-    lteHelper->EnablePhyTraces();
-    lteHelper->EnableMacTraces();
-    lteHelper->EnableRlcTraces();
-    lteHelper->EnablePdcpTraces();
-    AnimationInterface anim("lte-simulation.xml");
+    // // Enable packet tracing
+    // lteHelper->EnablePhyTraces();
+    // lteHelper->EnableMacTraces();
+    // lteHelper->EnableRlcTraces();
+    // lteHelper->EnablePdcpTraces();
+    // AnimationInterface anim("lte-simulation.xml");
 
-    anim.EnablePacketMetadata(true);
+    // anim.EnablePacketMetadata(true);
     
-    // Set node colors and descriptions
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        anim.UpdateNodeDescription(ueNodes.Get(i), "UE-" + std::to_string(i));
-        anim.UpdateNodeColor(ueNodes.Get(i), 0, 0, 255); // Blue for UEs
-        anim.UpdateNodeSize(i, 10, 10); // Make UEs visible
-    }
+    // // Set node colors and descriptions
+    // for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    //     anim.UpdateNodeDescription(ueNodes.Get(i), "UE-" + std::to_string(i));
+    //     anim.UpdateNodeColor(ueNodes.Get(i), 0, 0, 255); // Blue for UEs
+    //     anim.UpdateNodeSize(i, 10, 10); // Make UEs visible
+    // }
 
-    for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
-        anim.UpdateNodeDescription(enbNodes.Get(i), "SBS-" + std::to_string(i+1));
-        anim.UpdateNodeColor(enbNodes.Get(i), 255, 0, 0); // Red for SBS
-        anim.UpdateNodeSize(i + ueNodes.GetN(), 20, 20); // Make SBS bigger than UEs
-    }
+    // for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
+    //     anim.UpdateNodeDescription(enbNodes.Get(i), "SBS-" + std::to_string(i+1));
+    //     anim.UpdateNodeColor(enbNodes.Get(i), 255, 0, 0); // Red for SBS
+    //     anim.UpdateNodeSize(i + ueNodes.GetN(), 20, 20); // Make SBS bigger than UEs
+    // }
 
     // Create OpenGym Env
     Ptr<OpenGymInterface> openGymInterface = CreateObject<OpenGymInterface>(5555);
@@ -976,14 +982,14 @@ int main(int argc, char *argv[]) {
     openGymInterface->SetGetRewardCb(MakeCallback(&LteGymEnv::GetReward, lteEnv));
     openGymInterface->SetGetExtraInfoCb(MakeCallback(&LteGymEnv::GetExtraInfo, lteEnv));
     openGymInterface->SetExecuteActionsCb(MakeCallback(&LteGymEnv::ExecuteActions, lteEnv));
-    Simulator::Schedule (Seconds(0.0), &ScheduleNextStateRead, 1, openGymInterface);
+    Simulator::Schedule (Seconds(0.0), &ScheduleNextStateRead, 1.0, openGymInterface);
 
-    // Set update rate for smoother animation
-    anim.SetMobilityPollInterval(Seconds(0.01));
+    // // Set update rate for smoother animation
+    // anim.SetMobilityPollInterval(Seconds(0.01));
     
-    // Enable packet metadata with custom settings
-    anim.EnablePacketMetadata(true);
-    anim.SetMaxPktsPerTraceFile(1000000);
+    // // Enable packet metadata with custom settings
+    // anim.EnablePacketMetadata(true);
+    // anim.SetMaxPktsPerTraceFile(1000000);
 
 
     Simulator::Stop(Seconds(simTime));

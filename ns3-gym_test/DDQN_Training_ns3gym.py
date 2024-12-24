@@ -9,6 +9,7 @@ from tensorflow.keras.optimizers import Adam
 from collections import deque
 import random
 import time
+import matplotlib.pyplot as plt
 
 class DDQNAgent:
     def __init__(self, state_size, action_size):
@@ -16,14 +17,14 @@ class DDQNAgent:
         self.action_size = action_size*2
         
         # Hyperparameters
-        self.memory = deque(maxlen=2000)
-        self.gamma = 0.95    # discount rate
+        self.memory = deque(maxlen=1000)
+        self.gamma = 0.98    # discount rate (0.95)
         self.epsilon = 1.0   # exploration rate
         self.epsilon_min = 0.01
-        self.epsilon_decay = 0.995
-        self.learning_rate = 0.001
-        self.update_target_frequency = 100
-        self.batch_size = 32
+        self.epsilon_decay = 0.9995 # 0.9995
+        self.learning_rate = 0.003 # 0.001
+        self.update_target_frequency = 10 #40
+        self.batch_size = 16
         
         # Create main and target networks
         self.model = self._build_model()
@@ -32,12 +33,13 @@ class DDQNAgent:
         
         # Training step counter
         self.train_step = 0
+        self.loss_history = []  # Store all losses
 
     def _build_model(self):
         model = Sequential([
-            Dense(64, activation='relu', input_shape=(self.state_size,)),
-            Dense(64, activation='relu'),
-            Dense(self.action_size, activation='linear')
+            Dense(32, activation='relu', input_shape=(self.state_size,)), #64
+            Dense(16, activation='relu'), #64
+            Dense(self.action_size, activation='tanh')  # Use tanh activation to scale actions to [-1, 1]
         ])
         model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
         return model
@@ -50,21 +52,22 @@ class DDQNAgent:
 
     def act(self, state):
         if np.random.rand() <= self.epsilon:
-            # Random action: generate random power and CIO adjustments
-            return np.random.uniform(-3, 3, self.action_size)  # Adjustments between -3 and 3 dB
+            return np.random.uniform(-3, 3, self.action_size)
         
         act_values = self.model.predict(state.reshape(1, -1), verbose=0)
-        return act_values[0]
+        # Scale tanh output (-1 to 1) to your desired range (-3 to 3)
+        return act_values[0] * 3
 
     def replay(self):
         if len(self.memory) < self.batch_size:
             return
         
         minibatch = random.sample(self.memory, self.batch_size)
-        
+        losses = []  # Track losses
+
         for state, action, reward, next_state, done in minibatch:
             target = self.model.predict(state.reshape(1, -1), verbose=0)
-            
+
             if done:
                 target[0] = reward
             else:
@@ -72,79 +75,119 @@ class DDQNAgent:
                 a = np.argmax(self.model.predict(next_state.reshape(1, -1), verbose=0)[0])
                 t = self.target_model.predict(next_state.reshape(1, -1), verbose=0)[0]
                 target[0] = reward + self.gamma * t[a]
-            
-            self.model.fit(state.reshape(1, -1), target, epochs=1, verbose=0)
-        
+
+            # Train the model and store the loss
+            history = self.model.fit(state.reshape(1, -1), target, epochs=1, verbose=0)
+            losses.append(history.history['loss'][0])
+
+        avg_loss = np.mean(losses)
+        self.loss_history.append(avg_loss)
+
         # Decay epsilon
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
-        
+
         # Update target network periodically
         self.train_step += 1
         if self.train_step % self.update_target_frequency == 0:
             self.update_target_model()
 
+        print(f"Replay - Average Loss: {avg_loss:.4f}")
+
+
 def preprocess_state(obs):
-    # Flatten the state if it's multi-dimensional
-    return np.array(obs).flatten()
+    # Flatten and normalize the state if it's multi-dimensional
+    state = np.array(obs).flatten()
+    return state / np.linalg.norm(state)  # Normalize the state vector
 
 def main():
     try:
-        # Create and configure the environment
         env = ns3env.Ns3Env(port=5555)
         
-        # Get environment dimensions
         state = env.reset()
         state_size = len(state)
         action_size = env.action_space.shape[0]
-        
-        # Create DDQN agent
         agent = DDQNAgent(state_size, action_size)
         
-        # Training parameters
-        n_episodes = 10
-        max_steps = 100 #limit the number of steps per episode in case of simulation not ending in ns3
-        
+        n_episodes = 50
+        max_steps = 100
+        reward_history = []
+        epsilon_history = []
+
         for episode in range(n_episodes):
             state = env.reset()
             total_reward = 0
-            
+            actions_taken = []
+
             for step in range(max_steps):
-                # Get action from agent
                 action = agent.act(state)
+                actions_taken.append(action)
                 
-                # Take action in environment
                 next_state, reward, done, info = env.step(action)
-                
-                # Store experience and train
                 agent.remember(state, action, reward, next_state, done)
                 agent.replay()
                 
                 total_reward += reward
                 state = next_state
                 
-                # Break if episode is done (game over in ns3)
                 if done:
                     break
-            
+
+            reward_history.append(total_reward)
+            epsilon_history.append(agent.epsilon)
+
+            # Per-episode reporting
             print(f"Episode: {episode + 1}/{n_episodes}")
-            print(f"Total Reward: {total_reward}")
-            print(f"Epsilon: {agent.epsilon}")
+            print(f"Total Reward: {total_reward:.2f}")
+            print(f"Max Action Taken: {np.max(actions_taken):.2f}")
+            print(f"Min Action Taken: {np.min(actions_taken):.2f}")
+            print(f"Epsilon: {agent.epsilon:.4f}")
             print("------------------------")
-            
-            # Save model periodically
-            if (episode + 1) % 100 == 0:
+
+            # Save reward trends
+            plt.figure(figsize=(10, 6))
+            plt.plot(reward_history, label="Total Reward per Episode")
+            plt.xlabel("Episode")
+            plt.ylabel("Total Reward")
+            plt.title("Reward Trend Over Episodes")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"reward_trend_episode_{episode + 1}.png")
+            plt.close()
+
+            # Save epsilon trends
+            plt.figure(figsize=(10, 6))
+            plt.plot(epsilon_history, label="Epsilon Decay")
+            plt.xlabel("Episode")
+            plt.ylabel("Epsilon Value")
+            plt.title("Epsilon Decay Over Episodes")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"epsilon_decay_episode_{episode + 1}.png")
+            plt.close()
+
+            # Save loss trends
+            plt.figure(figsize=(10, 6))
+            plt.plot(agent.loss_history, label="Loss History")
+            plt.xlabel("Training Steps")
+            plt.ylabel("Loss")
+            plt.title(f"Loss Trend Up to Episode {episode + 1}")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"loss_trend_episode_{episode + 1}.png")
+            plt.close()
+
+            # Optionally save the model every 100 episodes
+            if (episode + 1) % 10 == 0:
                 agent.model.save(f'ddqn_model_episode_{episode + 1}.h5')
-                
-        # Proper cleanup
+
         env.close()
-        time.sleep(2.0)  # Give time for ns-3 to clean up
+        time.sleep(2.0)
         
     except Exception as e:
         print(f"Simulation error: {str(e)}")
         
     finally:
-        # Ensure environment is closed even if there's an error
         try:
             env.close()
         except:
