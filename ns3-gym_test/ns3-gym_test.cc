@@ -448,7 +448,7 @@ private:
   const double m_maxCioAdjustment = 2.0;    // dB
 
   // Episode parameters
-  const uint32_t m_maxSteps = 30;
+  const uint32_t m_maxSteps = 50;
   uint32_t m_currentStep;
 };
 
@@ -649,7 +649,7 @@ double LteGymEnv::CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb)
         
         for (const auto& ueIp : connectedUeIps) {
             if (t.sourceAddress == ueIp || t.destinationAddress == ueIp) {
-                currentTotalBytes += flow.second.rxBytes;
+                currentTotalBytes += (flow.second.rxBytes + flow.second.txBytes);
                 break;
             }
         }
