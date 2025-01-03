@@ -17,17 +17,17 @@ class SingleDDQNAgent:
     def __init__(self, state_size):
         self.state_size = state_size
         self.action_size = 9
-        self.power_options = [20, 30, 40]
-        self.cio_options = [-10, 0, 10]
+        self.power_options = [-3, 0, 3]
+        self.cio_options = [-3, 0, 3]
         
         # Hyperparameters
-        self.memory = deque(maxlen=20000) 
+        self.memory = deque(maxlen=1500) 
         self.gamma = 0.95    
         self.epsilon = 1.0   
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.9998 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate
+        self.epsilon_decay = 0.998 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate
         self.learning_rate = 0.001 # 0.001
-        self.update_target_frequency = 500
+        self.update_target_frequency = 300
         self.batch_size = 32
         
         # Create main and target networks with specified input shapes
@@ -45,10 +45,9 @@ class SingleDDQNAgent:
         model = Sequential([
             Input(shape=(self.state_size,)),
             Dense(32, activation='relu'),
-            # Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='huber_loss', optimizer=Adam(learning_rate=self.learning_rate))
+        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
         return model
 
     def _create_train_step(self):
@@ -141,7 +140,7 @@ class SingleDDQNAgent:
 
 
 class IndependentDDQNAgent:
-    def __init__(self, state_size, num_enbs):
+    def __init__(self, state_size, num_enbs=10):
         self.num_enbs = num_enbs
         self.agents = [SingleDDQNAgent(state_size) for _ in range(num_enbs)]
         self.loss_history = []
@@ -181,12 +180,13 @@ def main():
         
         state = env.reset()
         state_size = len(state)
-        num_enbs = 3
+        num_enbs = 10
         agent = IndependentDDQNAgent(state_size, num_enbs)
         
-        n_episodes = 200
+        n_episodes = 30
         max_steps = 100
         reward_history = []
+        reward_per_step = []
         epsilon_history = []
 
         total_steps = 0  # Track total steps across episodes
@@ -206,6 +206,7 @@ def main():
                 agent.replay()
                 
                 total_reward += reward
+                reward_per_step.append(reward)  # Log reward for the current step
                 state = next_state
                 
                 if done:
@@ -222,6 +223,16 @@ def main():
             print(f"Total Reward: {total_reward:.2f}")
             print(f"Epsilon: {agent.epsilon:.4f}")
             print("------------------------")
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(reward_per_step, label="Reward per Step")
+            plt.xlabel("Steps")
+            plt.ylabel("Reward")
+            plt.title("Reward Trend Over Steps")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"reward_trend_steps_{episode + 1}.png")
+            plt.close()
 
             plt.figure(figsize=(10, 6))
             plt.plot(reward_history, label="Total Reward per Episode")

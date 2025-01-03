@@ -15,11 +15,7 @@
 
 using namespace ns3;
 
-double minPowerDbm = 10.0;
-double maxPowerDbm = 40.0;
 std::vector<double> cioValues; // Store CIO values for each SBS
-double minCio = -10.0; // Minimum CIO value in dB
-double maxCio = 10.0; // Maximum CIO value in dB
 
 double CalculateRsrp(Ptr<Node> ueNode, Ptr<Node> gnbNode, double txPowerDbm, double pathLossExponent) {
     Ptr<MobilityModel> ueMobility = ueNode->GetObject<MobilityModel>();
@@ -76,16 +72,6 @@ void checkUEPosition(NodeContainer& ueNodes){
             ueNodes.Get(i)->GetObject<ConstantVelocityMobilityModel>();
         std::cout << "UE " << i << " position: " << mobility->GetPosition() 
                 << ", velocity: " << mobility->GetVelocity() << std::endl;
-    }
-}
-
-// Randomize CIO values for each SBS
-void RandomizeCioValues(int numEnb, double minCio, double maxCio) {
-    cioValues.clear();
-    for (int i = 0; i < numEnb; ++i) {
-        double cio = minCio + (maxCio - minCio) * ((double) rand() / RAND_MAX);
-        cioValues.push_back(cio);
-        std::cout << "eNB " << i << " CIO value: " << cio << " dB" << std::endl;
     }
 }
 
@@ -220,22 +206,28 @@ void HandoverDecision(Ptr<LteHelper> lteHelper, Ptr<PointToPointEpcHelper> epcHe
             }
         }
 
-        // Perform handover if better neighbor found
         if (targetEnbDevice && targetCellId != currentCellId && maxAdjustedRsrp > (servingRsrp + servingCio)) {
-            std::cout << "\n[INFO] Triggering handover for UE " << i 
-                      << "\n  From CellId: " << currentCellId
-                      << " (RSRP + CIO: " << servingRsrp + servingCio << " dB)"
-                      << "\n  To CellId: " << targetCellId 
-                      << " (RSRP + CIO: " << maxAdjustedRsrp << " dB)"
-                      << "\n  Improvement: " << maxAdjustedRsrp - (servingRsrp + servingCio) << " dB" << std::endl;
+            // Verify UE is still in valid state before triggering handover
+            if (ueRrc->GetState() == LteUeRrc::CONNECTED_NORMALLY && 
+                ueRrc->GetRnti() != 0) {
+                
+                std::cout << "\n[INFO] Triggering handover for UE " << i 
+                          << "\n  From CellId: " << currentCellId
+                          << " (RSRP + CIO: " << servingRsrp + servingCio << " dB)"
+                          << "\n  To CellId: " << targetCellId 
+                          << " (RSRP + CIO: " << maxAdjustedRsrp << " dB)"
+                          << "\n  Improvement: " << maxAdjustedRsrp - (servingRsrp + servingCio) << " dB" << std::endl;
 
-            lteHelper->HandoverRequest(Seconds(0.1), ueDevice, servingEnb, targetCellId);
-            std::cout << "[DEBUG] Handover request sent successfully" << std::endl;
+                lteHelper->HandoverRequest(Seconds(0), ueDevice, servingEnb, targetCellId);
+                std::cout << "[DEBUG] Handover request sent successfully" << std::endl;
+            } else {
+                std::cout << "[WARNING] Skipping handover for UE " << i << " due to invalid state" << std::endl;
+            }
         }
     }
 
     // Schedule the next handover decision
-    const double HANDOVER_CHECK_INTERVAL = 1.0; // Check every 1 second
+    const double HANDOVER_CHECK_INTERVAL = 0.2; // Check every 1 second
     Simulator::Schedule(Seconds(HANDOVER_CHECK_INTERVAL), &HandoverDecision, 
                         lteHelper, epcHelper, ueNodes, enbDevs, ueDevs, pathLossExponent);
 
@@ -419,7 +411,11 @@ private:
   double CalculateQoSMetric();
   double CalculatePrbDeviation();
   double CalculatePrbUtilization(Ptr<LteEnbNetDevice> enbDevice);
-  double CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb); // Add this if needed
+  double CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb); 
+  double ScaleEnergyEfficiency(double ee);
+  double ScaleQoSMetric(double avgRsrp);
+  double ScalePrbDeviation(double prbDeviation);
+
   
   // Environment components
   Ptr<LteHelper> m_lteHelper;
@@ -439,16 +435,30 @@ private:
   std::vector<double> m_throughput;
 
   // Reward weights
-  const double m_w1 = 0.5; // Energy efficiency weight
-  const double m_w2 = 0.3; // QoS weight
-  const double m_w3 = 0.2; // PRB deviation weight
+  // Reward component weights
+    const double m_w_ee = 0;    // Energy Efficiency weight
+    const double m_w_qos = 0.6;   // QoS weight
+    const double m_w_prb = 0.4;   // PRB utilization weight
+
+    // Scaling parameters for EE
+    const double m_ee_target = 0.4;      // Target EE in Mbps/W
+    const double m_ee_scale = 0.4;       // Scale factor for EE normalization
+
+    // QoS thresholds (RSRP in dBm)
+    const double m_rsrp_excellent = -40.0;  // Excellent signal strength
+    const double m_rsrp_poor = -60.0;      // Poor signal strength
+
+    // PRB utilization targets
+    const double m_prb_excellent = 10;   // target deviation 10%
+    const double m_prb_poor = 30;   // Scale factor for PRB normalization
+
 
   // Action bounds
   const double m_maxPowerAdjustment = 3.0;  // dB
   const double m_maxCioAdjustment = 2.0;    // dB
 
   // Episode parameters
-  const uint32_t m_maxSteps = 50;
+  const uint32_t m_maxSteps = 100;
   uint32_t m_currentStep;
 };
 
@@ -476,7 +486,7 @@ LteGymEnv::LteGymEnv(Ptr<LteHelper> lteHelper, NetDeviceContainer enbDevs,
 Ptr<OpenGymSpace> LteGymEnv::GetObservationSpace()
 {
   uint32_t numEnb = m_enbDevs.GetN();
-  std::vector<uint32_t> shape = {numEnb, 4}; // 4 features per SBS
+  std::vector<uint32_t> shape = {numEnb, 3}; // 4 features per SBS
   std::string dtype = "float"; 
   std::cout << "Observation Space: [";
   for (size_t i = 0; i < shape.size(); ++i) {
@@ -527,7 +537,7 @@ Ptr<OpenGymDataContainer> LteGymEnv::GetObservation()
     box->AddValue(m_powers[i]);
     box->AddValue(m_cioValues[i]);
     box->AddValue(m_prbUtilization[i]);
-    box->AddValue(m_throughput[i]);
+    // box->AddValue(m_throughput[i]);
   }
 
   std :: cout << "Observation: " << box << std::endl;
@@ -536,19 +546,35 @@ Ptr<OpenGymDataContainer> LteGymEnv::GetObservation()
 }
 
 float LteGymEnv::GetReward() {
-    double r_ee = CalculateEnergyEfficiency()*100;
-    // Convert RSRP to positive metric where higher is better
-    double r_qos = (CalculateQoSMetric() + 100)/100; // Assuming RSRP in dBm
-    // Convert PRB deviation to efficiency (1 - normalized_deviation)
-    double r_prb = 1 - CalculatePrbDeviation()/100; // Assuming percentages
+    // 1. Energy Efficiency Component
+    double ee = CalculateEnergyEfficiency();
+    double r_ee = ScaleEnergyEfficiency(ee);
     
-    // Linear combination with weights
-    double reward = (m_w1 * r_ee + m_w2 * r_qos + m_w3 * r_prb) / (m_w1 + m_w2 + m_w3);
+    // 2. QoS Component
+    double avg_rsrp = CalculateQoSMetric();
+    double r_qos = ScaleQoSMetric(avg_rsrp);
     
-    std::cout << "Reward components: EE=" << r_ee << " QoS=" << r_qos 
-              << " PRB=" << r_prb << " Total=" << reward << std::endl;
+    // 3. PRB Utilization Component
+    double prb_deviation = CalculatePrbDeviation();
+    double r_prb = ScalePrbDeviation(prb_deviation);
     
-    return reward;
+    // Combine components with weights
+    double total_reward = (m_w_ee * r_ee + 
+                            m_w_qos * r_qos + 
+                            m_w_prb * r_prb);
+    
+    // Log components for debugging
+    std::cout << "\nReward Components:"
+                << "\n  EE Raw: " << ee << " Mbps/W"
+                << "\n  EE Scaled: " << r_ee
+                << "\n  Avg RSRP: " << avg_rsrp << " dBm"
+                << "\n  QoS Scaled: " << r_qos
+                << "\n  PRB Deviation: " << prb_deviation << "%"
+                << "\n  PRB Scaled: " << r_prb
+                << "\n  Total Reward: " << total_reward
+                << std::endl;
+    
+    return total_reward;
 }
 
 bool LteGymEnv::GetGameOver()
@@ -576,15 +602,16 @@ bool LteGymEnv::ExecuteActions(Ptr<OpenGymDataContainer> action)
     double powerAdj = box->GetValue(i * 2);
     Ptr<LteEnbNetDevice> enb = DynamicCast<LteEnbNetDevice>(m_enbDevs.Get(i));
     std :: cout << "Power Adjustment: " << powerAdj << std::endl;
-    double currentPower = enb->GetPhy()->GetTxPower();
-    double targetPower = std::max(minPowerDbm, std::min(maxPowerDbm, currentPower + powerAdj)); // Clamp to [10, 40]
-    enb->GetPhy()->SetTxPower(targetPower);
+    // double currentPower = enb->GetPhy()->GetTxPower();
+    // double targetPower = std::max(minPowerDbm, std::min(maxPowerDbm, currentPower + powerAdj)); // Clamp to [10, 40]
+    enb->GetPhy()->SetTxPower(powerAdj);
     
     // Get CIO adjustment
     double cioAdj = box->GetValue(i * 2 + 1);
     std :: cout << "CIO Adjustment: " << cioAdj << std::endl;
-    cioValues[i] += cioAdj;
-    cioValues[i] = std::max(minCio, std::min(maxCio, cioValues[i])); // Clamp to [-10, 10]
+    // cioValues[i] += cioAdj;
+    // cioValues[i] = std::max(minCio, std::min(maxCio, cioValues[i])); // Clamp to [-10, 10]
+    cioValues[i] = cioAdj;
   }
 
   std :: cout << "Actions: " << action << std::endl;
@@ -643,25 +670,25 @@ double LteGymEnv::CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb)
         }
     }
     
-    // Calculate current total bytes
+    // Calculate current total bytes - only count received bytes
     for (const auto& flow : stats) {
         Ipv4FlowClassifier::FiveTuple t = m_classifier->FindFlow(flow.first);
         
         for (const auto& ueIp : connectedUeIps) {
-            if (t.sourceAddress == ueIp || t.destinationAddress == ueIp) {
-                currentTotalBytes += (flow.second.rxBytes + flow.second.txBytes);
+            if (t.destinationAddress == ueIp) {  // Only count received bytes
+                currentTotalBytes += flow.second.rxBytes;  // Only count rxBytes
                 break;
             }
         }
     }
     
-    // Calculate throughput
+    // Calculate throughput with minimum time delta protection
     double throughput = 0.0;
     auto lastMeasurement = lastMeasurements.find(cellId);
     
     if (lastMeasurement != lastMeasurements.end()) {
         double timeDelta = currentTime - lastMeasurement->second.first;
-        if (timeDelta > 0) {
+        if (timeDelta >= 0.1) {  // Ensure minimum 100ms interval
             uint64_t bytesDelta = currentTotalBytes - lastMeasurement->second.second;
             throughput = (bytesDelta * 8.0) / (timeDelta * 1e6); // Convert to Mbps
         }
@@ -670,14 +697,39 @@ double LteGymEnv::CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb)
     // Update last measurements
     lastMeasurements[cellId] = std::make_pair(currentTime, currentTotalBytes);
     
-    // Add safety check for unreasonable values
-    if (throughput > 1000) { // 1000 Mbps as a reasonable maximum
-        std::cout << "Warning: Unusually high throughput detected for cell " << cellId 
-                  << ": " << throughput << " Mbps" << std::endl;
-        throughput = 0.0; // Reset to 0 or last known good value
+    // Add more stringent safety check
+    if (throughput > 30) { // 100 Mbps as a more reasonable maximum for LTE
+        std::cout << "Warning: Throughput capped for cell " << cellId 
+                  << " from " << throughput << " to 100 Mbps" << std::endl;
+        throughput = 0;
     }
     
     return throughput;
+}
+
+double LteGymEnv::ScaleEnergyEfficiency(double ee) {
+    // Sigmoid-based scaling for EE
+    double normalized_ee = (ee - m_ee_target) / m_ee_scale;
+    double scaled_ee = 2.0 / (1.0 + std::exp(-normalized_ee)) - 1.0;
+    return scaled_ee;
+}
+
+double LteGymEnv::ScaleQoSMetric(double rsrp) {
+    // Linear scaling between poor and excellent thresholds
+    if (rsrp >= m_rsrp_excellent) return 1.0;
+    if (rsrp <= m_rsrp_poor) return -1.0;
+    
+    return 2.0 * (rsrp - m_rsrp_poor) / 
+            (m_rsrp_excellent - m_rsrp_poor) - 1.0;
+}
+
+double LteGymEnv::ScalePrbDeviation(double deviation) {
+    // Linear scaling for PRB deviation between poor and excellent thresholds
+    if (deviation <= m_prb_excellent) return 1.0;
+    if (deviation >= m_prb_poor) return -1.0;
+    
+    return 2.0 * (deviation - m_prb_poor) / 
+        (m_prb_excellent-m_prb_poor) - 1.0;
 }
 
 // Helper functions implementation
@@ -772,12 +824,14 @@ double LteGymEnv::CalculatePrbDeviation()
 
 int main(int argc, char *argv[]) {
     double simTime = 60;
-    int numEnb = 10;  
-    int numUes = 10;
+    int numEnb = 3;  
+    int numUes = 20;
     double minSpeed = 1.0;
     double maxSpeed = 3.0;
     double pathLossExponent = 3.5;
-    double maxLength = 1000.0; //length of simulation environment
+    double maxLength = 500.0; //length of simulation environment
+    double powerOptions[] = {20.0, 30.0, 40.0}; // Power options for eNBs
+    double cioOptions[] = {-10.0, 0.0, 10.0}; // CIO options for eNBs
 
     std::cout << "Starting LTE simulation with " << numEnb 
               << " eNBs and " << numUes << " UEs." << std::endl;
@@ -786,8 +840,6 @@ int main(int argc, char *argv[]) {
     enbNodes.Create(numEnb);
     NodeContainer ueNodes;
     ueNodes.Create(numUes);
-
-    RandomizeCioValues(numEnb, minCio, maxCio);
 
     // Create LTE helper
     Ptr<LteHelper> lteHelper = CreateObject<LteHelper>();
@@ -848,8 +900,19 @@ int main(int argc, char *argv[]) {
     // Set random transmission power for each eNB
     for (uint32_t i = 0; i < enbDevs.GetN(); ++i) {
         Ptr<LteEnbNetDevice> enb = DynamicCast<LteEnbNetDevice>(enbDevs.Get(i));
-        double power = minPowerDbm + (maxPowerDbm - minPowerDbm) * ((double) rand() / RAND_MAX);
+        // Pick a random index from the power options array
+        int powerIdx = rand() % 3;  // Random index between 0, 1, or 2
+        double power = powerOptions[powerIdx];
         enb->GetPhy()->SetTxPower(power);
+    }
+
+    // Set random CIO values for each eNB
+    for (int i = 0; i < numEnb; ++i) {
+        // Pick a random index from the cioOptions vector
+        int cioIdx = rand() % 3;
+        double cio = cioOptions[cioIdx];
+        cioValues.push_back(cio);
+        std::cout << "eNB " << i << " CIO value: " << cio << " dB" << std::endl;
     }
 
     // Add X2 interface
@@ -889,37 +952,37 @@ int main(int argc, char *argv[]) {
     // Setup applications
     uint16_t serverPort = 8080;
     UdpServerHelper server(serverPort);
-    // //install UDP server on all UES
-    // for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-    //     ApplicationContainer serverApp = server.Install(ueNodes.Get(i));
-    //     serverApp.Start(Seconds(0.0));
-    //     serverApp.Stop(Seconds(simTime));
-    //     std::cout << "Installing UDP server on UE " << i << " (IP: " << ueIpIface.GetAddress(i) 
-    //               << ") port " << serverPort << std::endl;
-    // }
+    //install UDP server on all UES
+    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+        ApplicationContainer serverApp = server.Install(ueNodes.Get(i));
+        serverApp.Start(Seconds(0.0));
+        serverApp.Stop(Seconds(simTime));
+        std::cout << "Installing UDP server on UE " << i << " (IP: " << ueIpIface.GetAddress(i) 
+                  << ") port " << serverPort << std::endl;
+    }
 
-    ApplicationContainer serverApp = server.Install(ueNodes.Get(0));
+    // ApplicationContainer serverApp = server.Install(ueNodes.Get(0));
     
-    std::cout << "Installing UDP server on UE " << 0 << " (IP: " << ueIpIface.GetAddress(0) 
-              << ") port " << serverPort << std::endl;
-    serverApp.Start(Seconds(0.0));
-    serverApp.Stop(Seconds(simTime));
+    // std::cout << "Installing UDP server on UE " << 0 << " (IP: " << ueIpIface.GetAddress(0) 
+    //           << ") port " << serverPort << std::endl;
+    // serverApp.Start(Seconds(0.0));
+    // serverApp.Stop(Seconds(simTime));
 
     // Install UDP clients
     ApplicationContainer clientApps;
     for (uint32_t i = 1; i < ueNodes.GetN(); ++i) {
-        UdpClientHelper client(ueIpIface.GetAddress(0), serverPort);
-        client.SetAttribute("MaxPackets", UintegerValue(0)); // Limit packets 0
-        client.SetAttribute("Interval", TimeValue(MilliSeconds(100))); // Less frequent 100
-        client.SetAttribute("PacketSize", UintegerValue(1024)); // Smaller packets 1024
+        UdpClientHelper client(ueIpIface.GetAddress(i-1), serverPort);
+        client.SetAttribute("MaxPackets", UintegerValue(0));             // Unlimited packets
+        client.SetAttribute("Interval", TimeValue(MicroSeconds(100)));   // Higher frequency
+        client.SetAttribute("PacketSize", UintegerValue(8192));         // Larger packets
         
         ApplicationContainer tempApp = client.Install(ueNodes.Get(i));
         clientApps.Add(tempApp);
         
-        std :: cout << "Installing UDP client on UE " << i << " (IP: " << ueIpIface.GetAddress(i) 
-                    << ") to send to UE " << i-1 << std::endl;
+        std::cout << "Installing UDP client on UE " << i << " (IP: " << ueIpIface.GetAddress(i) 
+                << ") to send to UE " << i-1 << std::endl;
     }
-    clientApps.Start(Seconds(1.0));
+    clientApps.Start(Seconds(0.0));
     clientApps.Stop(Seconds(simTime));
 
     // Setup flow monitor
@@ -934,8 +997,7 @@ int main(int argc, char *argv[]) {
     // Start the throughput calculation function
     // Schedule the first throughput calculation
     Simulator::Schedule(Seconds(1.0), &CalculateThroughput, flowMonitor, classifier, ueIpIface);
-
-    WaitForSetupAndTriggerHandover(lteHelper, epcHelper, ueNodes, enbDevs, ueDevs, pathLossExponent);
+    Simulator::Schedule(Seconds(0.5), &WaitForSetupAndTriggerHandover, lteHelper, epcHelper, ueNodes, enbDevs, ueDevs, pathLossExponent);
 
     //calculatePBU
     for (uint32_t i = 0; i < enbDevs.GetN(); ++i) {
@@ -982,7 +1044,7 @@ int main(int argc, char *argv[]) {
     openGymInterface->SetGetRewardCb(MakeCallback(&LteGymEnv::GetReward, lteEnv));
     openGymInterface->SetGetExtraInfoCb(MakeCallback(&LteGymEnv::GetExtraInfo, lteEnv));
     openGymInterface->SetExecuteActionsCb(MakeCallback(&LteGymEnv::ExecuteActions, lteEnv));
-    Simulator::Schedule (Seconds(0.0), &ScheduleNextStateRead, 1.0, openGymInterface);
+    Simulator::Schedule (Seconds(0.0), &ScheduleNextStateRead, 0.2, openGymInterface);
 
     // // Set update rate for smoother animation
     // anim.SetMobilityPollInterval(Seconds(0.01));
