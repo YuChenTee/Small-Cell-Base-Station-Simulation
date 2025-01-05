@@ -17,17 +17,17 @@ class SingleDDQNAgent:
     def __init__(self, state_size):
         self.state_size = state_size
         self.action_size = 9
-        self.power_options = [20, 30, 40]
-        self.cio_options = [-10, 0, 10]
+        self.power_options = [-3, 0, 3]
+        self.cio_options = [-3, 0, 3]
         
         # Hyperparameters
-        self.memory = deque(maxlen=30000) 
+        self.memory = deque(maxlen=1500) 
         self.gamma = 0.95    
         self.epsilon = 1.0   
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.99987 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
+        self.epsilon_decay = 0.998 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate
         self.learning_rate = 0.001 # 0.001
-        self.update_target_frequency = 500
+        self.update_target_frequency = 300
         self.batch_size = 32
         
         # Create main and target networks with specified input shapes
@@ -45,10 +45,9 @@ class SingleDDQNAgent:
         model = Sequential([
             Input(shape=(self.state_size,)),
             Dense(32, activation='relu'),
-            # Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='huber_loss', optimizer=Adam(learning_rate=self.learning_rate))
+        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
         return model
 
     def _create_train_step(self):
@@ -141,7 +140,7 @@ class SingleDDQNAgent:
 
 
 class IndependentDDQNAgent:
-    def __init__(self, state_size, num_enbs):
+    def __init__(self, state_size, num_enbs=10):
         self.num_enbs = num_enbs
         self.agents = [SingleDDQNAgent(state_size) for _ in range(num_enbs)]
         self.loss_history = []
@@ -175,29 +174,19 @@ class IndependentDDQNAgent:
     def epsilon(self):
         return self.agents[0].epsilon
 
-def save_models(agent, episode_num, save_dir='saved_models'):
-    # Save individual models for each eNB agent
-    for i, single_agent in enumerate(agent.agents):
-        # Save main model
-        main_model_path = f'{save_dir}/enb_{i}_main_model_episode_{episode_num}'
-        single_agent.model.save(main_model_path)
-        
-        # Save target model
-        target_model_path = f'{save_dir}/enb_{i}_target_model_episode_{episode_num}'
-        single_agent.target_model.save(target_model_path)
-
 def main():
     try:
         env = ns3env.Ns3Env(port=5555)
         
         state = env.reset()
         state_size = len(state)
-        num_enbs = 3
+        num_enbs = 10
         agent = IndependentDDQNAgent(state_size, num_enbs)
         
-        n_episodes = 300
+        n_episodes = 30
         max_steps = 100
         reward_history = []
+        reward_per_step = []
         epsilon_history = []
 
         total_steps = 0  # Track total steps across episodes
@@ -217,6 +206,7 @@ def main():
                 agent.replay()
                 
                 total_reward += reward
+                reward_per_step.append(reward)  # Log reward for the current step
                 state = next_state
                 
                 if done:
@@ -235,13 +225,23 @@ def main():
             print("------------------------")
 
             plt.figure(figsize=(10, 6))
+            plt.plot(reward_per_step, label="Reward per Step")
+            plt.xlabel("Steps")
+            plt.ylabel("Reward")
+            plt.title("Reward Trend Over Steps")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"reward_trend_steps_{episode + 1}.png")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
             plt.plot(reward_history, label="Total Reward per Episode")
             plt.xlabel("Episode")
             plt.ylabel("Total Reward")
             plt.title("Reward Trend Over Episodes")
             plt.legend()
             plt.grid()
-            plt.savefig(f"reward_trend.png")
+            plt.savefig(f"reward_trend_episode_{episode + 1}.png")
             plt.close()
 
             plt.figure(figsize=(10, 6))
@@ -251,21 +251,18 @@ def main():
             plt.title("Epsilon Decay Over Episodes")
             plt.legend()
             plt.grid()
-            plt.savefig(f"epsilon_decay.png")
+            plt.savefig(f"epsilon_decay_episode_{episode + 1}.png")
             plt.close()
 
             plt.figure(figsize=(10, 6))
             plt.plot(agent.loss_history, label="Loss History")
             plt.xlabel("Training Steps")
             plt.ylabel("Loss")
-            plt.title(f"Loss Trend Over Training Steps")
+            plt.title(f"Loss Trend Up to Episode {episode + 1}")
             plt.legend()
             plt.grid()
-            plt.savefig(f"loss_trend.png")
+            plt.savefig(f"loss_trend_episode_{episode + 1}.png")
             plt.close()
-
-            if (episode + 1) % 100 == 0:  # Save models every 100 episodes
-                save_models(agent, episode)
 
         env.close()
         time.sleep(2.0)

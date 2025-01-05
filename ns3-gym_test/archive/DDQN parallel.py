@@ -1,3 +1,5 @@
+import multiprocessing as mp
+from functools import partial
 import gym
 import ns3gym
 from ns3gym import ns3env
@@ -12,30 +14,29 @@ from collections import deque
 import random
 import time
 import matplotlib.pyplot as plt
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress most warnings
 
 class SingleDDQNAgent:
     def __init__(self, state_size):
         self.state_size = state_size
         self.action_size = 9
-        self.power_options = [20, 30, 40]
-        self.cio_options = [-10, 0, 10]
+        self.power_options = [-3, 0, 3]
+        self.cio_options = [-3, 0, 3]
         
         # Hyperparameters
-        self.memory = deque(maxlen=30000) 
-        self.gamma = 0.95    
-        self.epsilon = 1.0   
+        self.memory = deque(maxlen=1100)
+        self.gamma = 0.95
+        self.epsilon = 1.0
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.99987 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
-        self.learning_rate = 0.001 # 0.001
-        self.update_target_frequency = 500
+        self.epsilon_decay = 0.997
+        self.learning_rate = 0.001
+        self.update_target_frequency = 200
         self.batch_size = 32
-        
-        # Create main and target networks with specified input shapes
+
+        # Create main and target networks
         self.model = self._build_model()
         self.target_model = self._build_model()
-        
-        # Create and compile the train step function
-        self._create_train_step()
         
         self.update_target_model()
         self.train_step_counter = 0
@@ -45,25 +46,10 @@ class SingleDDQNAgent:
         model = Sequential([
             Input(shape=(self.state_size,)),
             Dense(32, activation='relu'),
-            # Dense(64, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
-        model.compile(loss='huber_loss', optimizer=Adam(learning_rate=self.learning_rate))
+        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
         return model
-
-    def _create_train_step(self):
-        """Create a compiled training step function to avoid retracing."""
-        @tf.function(reduce_retracing=True)
-        def train_step(states, target_q_values):
-            with tf.GradientTape() as tape:
-                q_values = self.model(states, training=True)
-                loss = tf.reduce_mean(tf.square(target_q_values - q_values))
-            
-            gradients = tape.gradient(loss, self.model.trainable_variables)
-            self.model.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
-            return loss
-        
-        self.train_step = train_step
 
     def update_target_model(self):
         self.target_model.set_weights(self.model.get_weights())
@@ -74,15 +60,22 @@ class SingleDDQNAgent:
         return self.power_options[power_idx], self.cio_options[cio_idx]
 
     @tf.function(reduce_retracing=True)
-    def _predict_action(self, state):
-        return self.model(state)
+    def train_step(self, states, target_q_values):
+        """Moved train_step outside _create_train_step to avoid pickling issues."""
+        with tf.GradientTape() as tape:
+            q_values = self.model(states, training=True)
+            loss = tf.reduce_mean(tf.square(target_q_values - q_values))
+        
+        gradients = tape.gradient(loss, self.model.trainable_variables)
+        self.model.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+        return loss
 
     def act(self, state):
         if np.random.rand() <= self.epsilon:
             action_idx = np.random.randint(self.action_size)
         else:
             state_tensor = tf.convert_to_tensor(state.reshape(1, -1), dtype=tf.float32)
-            act_values = self._predict_action(state_tensor)
+            act_values = self.model(state_tensor)
             action_idx = np.argmax(act_values[0])
         
         power, cio = self.decode_action(action_idx)
@@ -140,51 +133,60 @@ class SingleDDQNAgent:
         return float(loss)
 
 
-class IndependentDDQNAgent:
-    def __init__(self, state_size, num_enbs):
+class ParallelIndependentDDQNAgent:
+    def __init__(self, state_size, num_enbs=10, num_processes=4):
         self.num_enbs = num_enbs
+        self.num_processes = min(num_processes, num_enbs)
         self.agents = [SingleDDQNAgent(state_size) for _ in range(num_enbs)]
         self.loss_history = []
+        self.pool = mp.Pool(processes=self.num_processes)
 
     def act(self, state):
+        # Parallel action selection
+        chunk_size = self.num_enbs // self.num_processes
+        state_chunks = [state] * self.num_enbs
+        
+        results = self.pool.map(partial(self._parallel_act, state=state), 
+                              range(self.num_enbs))
+        
         actions = []
-        self.current_action_indices = []  # Store indices for remember function
-        for agent in self.agents:
-            action, action_idx = agent.act(state)
-            # Convert each action to float
+        self.current_action_indices = []
+        for action, action_idx in results:
             actions.extend([float(action[0]), float(action[1])])
             self.current_action_indices.append(action_idx)
-        # Return as a flat list of floats
         return actions
 
+    def _parallel_act(self, agent_idx, state):
+        return self.agents[agent_idx].act(state)
+
     def remember(self, state, action, reward, next_state, done):
-        for i, agent in enumerate(self.agents):
-            agent.remember(state, self.current_action_indices[i], reward, next_state, done)
+        # Parallel memory storage
+        args = [(i, state, self.current_action_indices[i], reward, next_state, done) 
+                for i in range(self.num_enbs)]
+        self.pool.map(self._parallel_remember, args)
+
+    def _parallel_remember(self, args):
+        agent_idx, state, action_idx, reward, next_state, done = args
+        self.agents[agent_idx].remember(state, action_idx, reward, next_state, done)
 
     def replay(self):
-        total_loss = 0
-        for agent in self.agents:
-            loss = agent.replay()
-            if loss is not None:
-                total_loss += loss
-        avg_loss = total_loss / self.num_enbs if self.num_enbs > 0 else 0
+        # Parallel replay
+        results = self.pool.map(self._parallel_replay, range(self.num_enbs))
+        losses = [loss for loss in results if loss is not None]
+        avg_loss = sum(losses) / len(losses) if losses else 0
         self.loss_history.append(avg_loss)
         return avg_loss
+
+    def _parallel_replay(self, agent_idx):
+        return self.agents[agent_idx].replay()
 
     @property
     def epsilon(self):
         return self.agents[0].epsilon
 
-def save_models(agent, episode_num, save_dir='saved_models'):
-    # Save individual models for each eNB agent
-    for i, single_agent in enumerate(agent.agents):
-        # Save main model
-        main_model_path = f'{save_dir}/enb_{i}_main_model_episode_{episode_num}'
-        single_agent.model.save(main_model_path)
-        
-        # Save target model
-        target_model_path = f'{save_dir}/enb_{i}_target_model_episode_{episode_num}'
-        single_agent.target_model.save(target_model_path)
+    def close(self):
+        self.pool.close()
+        self.pool.join()
 
 def main():
     try:
@@ -192,15 +194,19 @@ def main():
         
         state = env.reset()
         state_size = len(state)
-        num_enbs = 3
-        agent = IndependentDDQNAgent(state_size, num_enbs)
+        num_enbs = 10
+        num_processes = mp.cpu_count() - 1  # Leave one CPU for system tasks
         
-        n_episodes = 300
+        agent = ParallelIndependentDDQNAgent(state_size, num_enbs, num_processes)
+        
+        # Rest of the main function remains the same
+        n_episodes = 20
         max_steps = 100
         reward_history = []
+        reward_per_step = []
         epsilon_history = []
 
-        total_steps = 0  # Track total steps across episodes
+        total_steps = 0
 
         for episode in range(n_episodes):
             state = env.reset()
@@ -208,7 +214,7 @@ def main():
             actions_taken = []
 
             for step in range(max_steps):
-                total_steps += 1  # Increment total steps
+                total_steps += 1
                 action = agent.act(state)
                 actions_taken.append(action)
                 
@@ -217,6 +223,7 @@ def main():
                 agent.replay()
                 
                 total_reward += reward
+                reward_per_step.append(reward)
                 state = next_state
                 
                 if done:
@@ -226,6 +233,8 @@ def main():
                     gc.collect()
                     clear_session()
 
+            # [Plotting code remains the same]
+            
             reward_history.append(total_reward)
             epsilon_history.append(agent.epsilon)
 
@@ -234,6 +243,16 @@ def main():
             print(f"Epsilon: {agent.epsilon:.4f}")
             print("------------------------")
 
+            lt.figure(figsize=(10, 6))
+            plt.plot(reward_per_step, label="Reward per Step")
+            plt.xlabel("Steps")
+            plt.ylabel("Reward")
+            plt.title("Reward Trend Over Steps")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"reward_trend_steps_{episode + 1}.png")
+            plt.close()
+
             plt.figure(figsize=(10, 6))
             plt.plot(reward_history, label="Total Reward per Episode")
             plt.xlabel("Episode")
@@ -241,7 +260,7 @@ def main():
             plt.title("Reward Trend Over Episodes")
             plt.legend()
             plt.grid()
-            plt.savefig(f"reward_trend.png")
+            plt.savefig(f"reward_trend_episode_{episode + 1}.png")
             plt.close()
 
             plt.figure(figsize=(10, 6))
@@ -251,22 +270,20 @@ def main():
             plt.title("Epsilon Decay Over Episodes")
             plt.legend()
             plt.grid()
-            plt.savefig(f"epsilon_decay.png")
+            plt.savefig(f"epsilon_decay_episode_{episode + 1}.png")
             plt.close()
 
             plt.figure(figsize=(10, 6))
             plt.plot(agent.loss_history, label="Loss History")
             plt.xlabel("Training Steps")
             plt.ylabel("Loss")
-            plt.title(f"Loss Trend Over Training Steps")
+            plt.title(f"Loss Trend Up to Episode {episode + 1}")
             plt.legend()
             plt.grid()
-            plt.savefig(f"loss_trend.png")
+            plt.savefig(f"loss_trend_episode_{episode + 1}.png")
             plt.close()
 
-            if (episode + 1) % 100 == 0:  # Save models every 100 episodes
-                save_models(agent, episode)
-
+        agent.close()
         env.close()
         time.sleep(2.0)
         
@@ -276,9 +293,11 @@ def main():
     finally:
         try:
             env.close()
+            agent.close()
         except:
             pass
         print("Simulation completed.")
 
 if __name__ == "__main__":
+    mp.set_start_method('spawn')  # Required for TensorFlow
     main()

@@ -446,11 +446,11 @@ private:
 
     // QoS thresholds (RSRP in dBm)
     const double m_rsrp_excellent = -40.0;  // Excellent signal strength
-    const double m_rsrp_poor = -60.0;      // Poor signal strength
+    const double m_rsrp_poor = -80.0;      // Poor signal strength
 
     // PRB utilization targets
     const double m_prb_excellent = 10;   // target deviation 10%
-    const double m_prb_poor = 30;   // Scale factor for PRB normalization
+    const double m_prb_poor = 20;   // Scale factor for PRB normalization
 
 
   // Action bounds
@@ -458,7 +458,7 @@ private:
   const double m_maxCioAdjustment = 2.0;    // dB
 
   // Episode parameters
-  const uint32_t m_maxSteps = 100;
+  const uint32_t m_maxSteps = 300;
   uint32_t m_currentStep;
 };
 
