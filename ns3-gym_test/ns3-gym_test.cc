@@ -12,6 +12,7 @@
 #include <ns3/antenna-module.h>
 #include "ns3/trace-source-accessor.h"
 #include "ns3/opengym-module.h"
+#include <ctime> 
 
 using namespace ns3;
 
@@ -835,6 +836,10 @@ int main(int argc, char *argv[]) {
 
     std::cout << "Starting LTE simulation with " << numEnb 
               << " eNBs and " << numUes << " UEs." << std::endl;
+
+    // Use the current system time as the seed
+    unsigned int seed = static_cast<unsigned int>(time(0));
+    ns3::SeedManager::SetSeed(seed); // so that random variables are different everytime
 
     NodeContainer enbNodes;
     enbNodes.Create(numEnb);
