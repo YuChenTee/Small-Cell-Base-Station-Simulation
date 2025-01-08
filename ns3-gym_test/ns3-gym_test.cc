@@ -409,11 +409,13 @@ private:
   void CalculateState();
   void UpdateMetrics();
   double CalculateEnergyEfficiency();
+  double CalculateAveragePowerConsumption();
   double CalculateQoSMetric();
   double CalculatePrbDeviation();
   double CalculatePrbUtilization(Ptr<LteEnbNetDevice> enbDevice);
   double CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb); 
   double ScaleEnergyEfficiency(double ee);
+  double ScaleAveragePowerConsumption(double avgPower);
   double ScaleQoSMetric(double avgRsrp);
   double ScalePrbDeviation(double prbDeviation);
 
@@ -437,19 +439,24 @@ private:
 
   // Reward weights
   // Reward component weights
-    const double m_w_ee = 0;    // Energy Efficiency weight
-    const double m_w_qos = 0.6;   // QoS weight
-    const double m_w_prb = 0.4;   // PRB utilization weight
+    // const double m_w_ee = 0.4;    // Energy Efficiency weight
+    const double m_w_power = 0.4; // Power consumption weight
+    const double m_w_qos = 0.3;   // QoS weight
+    const double m_w_prb = 0.3;   // PRB deviation weight
 
     // Scaling parameters for EE
-    const double m_ee_target = 0.4;      // Target EE in Mbps/W
-    const double m_ee_scale = 0.4;       // Scale factor for EE normalization
+    // const double m_ee_target = 0.4;      // Target EE in Mbps/W
+    // const double m_ee_scale = 0.4;       // Scale factor for EE normalization
+
+    // Average power consumption thresholds
+    const double m_power_excellent = 25;  // Excellent power consumption
+    const double m_power_poor = 35;    // Poor power consumption
 
     // QoS thresholds (RSRP in dBm)
     const double m_rsrp_excellent = -40.0;  // Excellent signal strength
     const double m_rsrp_poor = -80.0;      // Poor signal strength
 
-    // PRB utilization targets
+    // PRB deviation targets
     const double m_prb_excellent = 10;   // target deviation 10%
     const double m_prb_poor = 20;   // Scale factor for PRB normalization
 
@@ -459,7 +466,7 @@ private:
   const double m_maxCioAdjustment = 2.0;    // dB
 
   // Episode parameters
-  const uint32_t m_maxSteps = 300;
+  const uint32_t m_maxSteps = 100;
   uint32_t m_currentStep;
 };
 
@@ -487,7 +494,7 @@ LteGymEnv::LteGymEnv(Ptr<LteHelper> lteHelper, NetDeviceContainer enbDevs,
 Ptr<OpenGymSpace> LteGymEnv::GetObservationSpace()
 {
   uint32_t numEnb = m_enbDevs.GetN();
-  std::vector<uint32_t> shape = {numEnb, 3}; // 4 features per SBS
+  std::vector<uint32_t> shape = {numEnb, 3}; // 3 features per SBS
   std::string dtype = "float"; 
   std::cout << "Observation Space: [";
   for (size_t i = 0; i < shape.size(); ++i) {
@@ -527,7 +534,7 @@ Ptr<OpenGymSpace> LteGymEnv::GetActionSpace()
 Ptr<OpenGymDataContainer> LteGymEnv::GetObservation()
 {
   uint32_t numEnb = m_enbDevs.GetN();
-  std::vector<uint32_t> shape = {numEnb, 4};
+  std::vector<uint32_t> shape = {numEnb, 3};
 
   std :: cout << "NumEnb: " << numEnb << std::endl;
   
@@ -548,8 +555,11 @@ Ptr<OpenGymDataContainer> LteGymEnv::GetObservation()
 
 float LteGymEnv::GetReward() {
     // 1. Energy Efficiency Component
-    double ee = CalculateEnergyEfficiency();
-    double r_ee = ScaleEnergyEfficiency(ee);
+    // double ee = CalculateEnergyEfficiency();
+    // double r_ee = ScaleEnergyEfficiency(ee);
+
+    double avg_power = CalculateAveragePowerConsumption();
+    double r_power = ScaleAveragePowerConsumption(avg_power);
     
     // 2. QoS Component
     double avg_rsrp = CalculateQoSMetric();
@@ -560,14 +570,14 @@ float LteGymEnv::GetReward() {
     double r_prb = ScalePrbDeviation(prb_deviation);
     
     // Combine components with weights
-    double total_reward = (m_w_ee * r_ee + 
+    double total_reward = (m_w_power * r_power + 
                             m_w_qos * r_qos + 
                             m_w_prb * r_prb);
     
     // Log components for debugging
     std::cout << "\nReward Components:"
-                << "\n  EE Raw: " << ee << " Mbps/W"
-                << "\n  EE Scaled: " << r_ee
+                << "\n  Avg Power: " << avg_power << " dBm"
+                << "\n  Power Scaled: " << r_power
                 << "\n  Avg RSRP: " << avg_rsrp << " dBm"
                 << "\n  QoS Scaled: " << r_qos
                 << "\n  PRB Deviation: " << prb_deviation << "%"
@@ -708,11 +718,20 @@ double LteGymEnv::CalculateEnbThroughput(Ptr<LteEnbNetDevice> enb)
     return throughput;
 }
 
-double LteGymEnv::ScaleEnergyEfficiency(double ee) {
-    // Sigmoid-based scaling for EE
-    double normalized_ee = (ee - m_ee_target) / m_ee_scale;
-    double scaled_ee = 2.0 / (1.0 + std::exp(-normalized_ee)) - 1.0;
-    return scaled_ee;
+// double LteGymEnv::ScaleEnergyEfficiency(double ee) {
+//     // Sigmoid-based scaling for EE
+//     double normalized_ee = (ee - m_ee_target) / m_ee_scale;
+//     double scaled_ee = 2.0 / (1.0 + std::exp(-normalized_ee)) - 1.0;
+//     return scaled_ee;
+// }
+
+double LteGymEnv::ScaleAveragePowerConsumption(double power) {
+    // Linear scaling for power consumption
+    if (power <= m_power_excellent) return 1.0;
+    if (power >= m_power_poor) return -1.0;
+    
+    return 2.0 * (power - m_power_poor) / 
+        (m_power_excellent-m_power_poor) - 1.0;
 }
 
 double LteGymEnv::ScaleQoSMetric(double rsrp) {
@@ -769,6 +788,20 @@ double LteGymEnv::CalculateEnergyEfficiency()
   std :: cout << "Energy Efficiency: " << totalThroughput / totalPower << std::endl;
   
   return totalThroughput / totalPower;
+}
+
+double LteGymEnv::CalculateAveragePowerConsumption()
+{
+    double totalPower = 0.0;
+    
+    for (uint32_t i = 0; i < m_enbDevs.GetN(); ++i) {
+        totalPower += m_powers[i];
+    }
+
+    std :: cout << "Average Power Consumption: " << totalPower / m_enbDevs.GetN() << std::endl;
+
+    return totalPower / m_enbDevs.GetN();
+
 }
 
 double LteGymEnv::CalculateQoSMetric()

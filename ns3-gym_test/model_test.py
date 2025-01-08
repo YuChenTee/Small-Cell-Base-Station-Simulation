@@ -33,9 +33,9 @@ def main():
 
     # Define paths to saved models
     model_paths = [
-        "saved_models/enb_0_main_model_episode_299",
-        "saved_models/enb_1_main_model_episode_299",
-        "saved_models/enb_2_main_model_episode_299"
+        "saved_models/enb_0_main_model_episode_499",
+        "saved_models/enb_1_main_model_episode_499",
+        "saved_models/enb_2_main_model_episode_499"
     ]
 
     # Create agents for each eNB
@@ -45,7 +45,7 @@ def main():
         # Initialize NS-3 environment
         env = ns3env.Ns3Env(port=5555)
         state = env.reset()
-        num_steps = 300
+        num_steps = 100
         
         # Initialize tracking lists
         total_reward = 0
