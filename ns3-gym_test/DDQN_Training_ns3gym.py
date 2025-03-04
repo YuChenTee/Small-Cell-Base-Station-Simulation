@@ -25,10 +25,10 @@ class SingleDDQNAgent:
         self.gamma = 0.95    
         self.epsilon = 1.0   
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.99993 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
+        self.epsilon_decay = 0.9998 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
         self.learning_rate = 0.001 # 0.001
-        self.update_target_frequency = 500
-        self.batch_size = 32
+        self.update_target_frequency = 1000 #500
+        self.batch_size = 64
         
         # Create main and target networks with specified input shapes
         self.model = self._build_model()
@@ -44,8 +44,8 @@ class SingleDDQNAgent:
     def _build_model(self):
         model = Sequential([
             Input(shape=(self.state_size,)),
-            Dense(32, activation='relu'),
-            # Dense(64, activation='relu'),
+            Dense(64, activation='relu'),
+            # Dense(32, activation='relu'),
             Dense(self.action_size, activation='linear')
         ])
         model.compile(loss='huber_loss', optimizer=Adam(learning_rate=self.learning_rate))
@@ -89,14 +89,19 @@ class SingleDDQNAgent:
         return [float(power), float(cio)], action_idx
 
     def remember(self, state, action_idx, reward, next_state, done):
-        self.memory.append((state, action_idx, reward, next_state, done))
+        # Add importance sampling weight
+        priority = 1.0  # Default priority for new experiences
+        self.memory.append((state, action_idx, reward, next_state, done, priority))
 
     def replay(self):
         if len(self.memory) < self.batch_size:
             return
         
-        # Sample and prepare batch
-        minibatch = random.sample(self.memory, self.batch_size)
+        # Sample with priorities
+        priorities = np.array([trans[5] for trans in self.memory])
+        probs = priorities / priorities.sum()
+        indices = np.random.choice(len(self.memory), self.batch_size, p=probs)
+        minibatch = [self.memory[idx] for idx in indices]
         states = np.array([transition[0] for transition in minibatch])
         action_indices = np.array([transition[1] for transition in minibatch])
         rewards = np.array([transition[2] for transition in minibatch])
@@ -188,14 +193,13 @@ def save_models(agent, episode_num, save_dir='saved_models'):
 
 def main():
     try:
-        env = ns3env.Ns3Env(port=5555)
-        
+        env = ns3env.Ns3Env(port=5555, simSeed=random.randint(1, 10000))
         state = env.reset()
         state_size = len(state)
         num_enbs = 3
         agent = IndependentDDQNAgent(state_size, num_enbs)
         
-        n_episodes = 500
+        n_episodes = 200
         max_steps = 100
         reward_history = []
         epsilon_history = []
@@ -203,6 +207,7 @@ def main():
         total_steps = 0  # Track total steps across episodes
 
         for episode in range(n_episodes):
+            env.simSeed = random.randint(1, 10000)
             state = env.reset()
             total_reward = 0
             actions_taken = []
@@ -243,6 +248,21 @@ def main():
             plt.grid()
             plt.savefig(f"reward_trend.png")
             plt.close()
+
+            # Compute moving average of total rewards over every 10 episodes
+            window_size = 10
+            if len(reward_history) >= window_size:
+                avg_rewards = np.convolve(reward_history, np.ones(window_size) / window_size, mode="valid")
+                avg_episodes = np.arange(len(avg_rewards))  # Ensure same length
+                plt.figure(figsize=(10, 6))
+                plt.plot(avg_episodes, avg_rewards, label="Average Reward (per 10 episodes)", marker="o")
+                plt.xlabel("Episode")
+                plt.ylabel("Average Total Reward")
+                plt.title("Reward Trend Over Episodes (Averaged Every 10)")
+                plt.legend()
+                plt.grid()
+                plt.savefig(f"reward_trend_average.png")
+                plt.close()
 
             plt.figure(figsize=(10, 6))
             plt.plot(epsilon_history, label="Epsilon Decay")

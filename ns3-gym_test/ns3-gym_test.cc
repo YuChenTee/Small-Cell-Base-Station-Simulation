@@ -440,9 +440,9 @@ private:
   // Reward weights
   // Reward component weights
     // const double m_w_ee = 0.4;    // Energy Efficiency weight
-    const double m_w_power = 0.4; // Power consumption weight
-    const double m_w_qos = 0.3;   // QoS weight
-    const double m_w_prb = 0.3;   // PRB deviation weight
+    const double m_w_power = 0.35; // Power consumption weight
+    const double m_w_qos = 0.45;   // QoS weight
+    const double m_w_prb = 0.2;   // PRB deviation weight
 
     // Scaling parameters for EE
     // const double m_ee_target = 0.4;      // Target EE in Mbps/W
@@ -454,11 +454,11 @@ private:
 
     // QoS thresholds (RSRP in dBm)
     const double m_rsrp_excellent = -40.0;  // Excellent signal strength
-    const double m_rsrp_poor = -80.0;      // Poor signal strength
+    const double m_rsrp_poor = -70.0;      // Poor signal strength
 
     // PRB deviation targets
-    const double m_prb_excellent = 10;   // target deviation 10%
-    const double m_prb_poor = 20;   // Scale factor for PRB normalization
+    const double m_prb_excellent = 10;   // Excellent PRB Deviation
+    const double m_prb_poor = 20;   // Poor PRB Deviation
 
 
   // Action bounds
@@ -870,8 +870,13 @@ int main(int argc, char *argv[]) {
     std::cout << "Starting LTE simulation with " << numEnb 
               << " eNBs and " << numUes << " UEs." << std::endl;
 
-    // Use the current system time as the seed
-    unsigned int seed = static_cast<unsigned int>(time(0));
+    // Default arguments defined by ns3gym, can set from python and use here
+    CommandLine cmd;
+    uint16_t openGymPort;    
+    uint32_t seed;  
+    cmd.AddValue("openGymPort", "Port for OpenGym-ZMQ", openGymPort);
+    cmd.AddValue("simSeed", "Random seed value", seed);
+    cmd.Parse(argc, argv);
     ns3::SeedManager::SetSeed(seed); // so that random variables are different everytime
 
     NodeContainer enbNodes;

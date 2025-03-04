@@ -33,9 +33,9 @@ def main():
 
     # Define paths to saved models
     model_paths = [
-        "saved_models/enb_0_main_model_episode_499",
-        "saved_models/enb_1_main_model_episode_499",
-        "saved_models/enb_2_main_model_episode_499"
+        "saved_models/enb_0_main_model_episode_899",
+        "saved_models/enb_1_main_model_episode_899",
+        "saved_models/enb_2_main_model_episode_899"
     ]
 
     # Create agents for each eNB

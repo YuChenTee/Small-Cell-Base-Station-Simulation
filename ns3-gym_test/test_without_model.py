@@ -10,7 +10,7 @@ def main():
     try:
         # Initialize NS-3 environment
         env = ns3env.Ns3Env(port=5555)
-        num_steps = 300
+        num_steps = 100
         
         # Initialize tracking lists
         total_reward = 0
