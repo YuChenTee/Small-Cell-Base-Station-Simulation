@@ -57,7 +57,8 @@ class SingleDDQNAgent:
         def train_step(states, target_q_values):
             with tf.GradientTape() as tape:
                 q_values = self.model(states, training=True)
-                loss = tf.reduce_mean(tf.square(target_q_values - q_values))
+                huber = tf.keras.losses.Huber()
+                loss = huber(target_q_values, q_values)
             
             gradients = tape.gradient(loss, self.model.trainable_variables)
             self.model.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
@@ -203,6 +204,9 @@ def main():
         max_steps = 100
         reward_history = []
         epsilon_history = []
+        power_history = []
+        qos_history = []
+        prb_history = []
 
         total_steps = 0  # Track total steps across episodes
 
@@ -211,6 +215,12 @@ def main():
             state = env.reset()
             total_reward = 0
             actions_taken = []
+            
+            # Cumulative sums for metrics in each episode
+            cumulative_power = 0
+            cumulative_qos = 0
+            cumulative_prb = 0
+            num_steps = 0
 
             for step in range(max_steps):
                 total_steps += 1  # Increment total steps
@@ -218,6 +228,14 @@ def main():
                 actions_taken.append(action)
                 
                 next_state, reward, done, info = env.step(action)
+                parsed = dict(item.split(":") for item in info.split(","))
+                
+                # Accumulate power, QoS, and PRB values
+                cumulative_power += float(parsed["Power(Scaled)"])
+                cumulative_qos += float(parsed["QoS(Scaled)"])
+                cumulative_prb += float(parsed["PRB(Scaled)"])
+                num_steps += 1
+                
                 agent.remember(state, action, reward, next_state, done)
                 agent.replay()
                 
@@ -226,11 +244,17 @@ def main():
                 
                 if done:
                     break
-            
-                if step % 100 == 0:
-                    gc.collect()
-                    clear_session()
 
+            # Compute averages over the episode
+            avg_power = cumulative_power / num_steps
+            avg_qos = cumulative_qos / num_steps
+            avg_prb = cumulative_prb / num_steps
+
+            # Append averages to history
+            power_history.append(avg_power)
+            qos_history.append(avg_qos)
+            prb_history.append(avg_prb)
+            
             reward_history.append(total_reward)
             epsilon_history.append(agent.epsilon)
 
@@ -239,6 +263,7 @@ def main():
             print(f"Epsilon: {agent.epsilon:.4f}")
             print("------------------------")
 
+            # Plotting reward trend
             plt.figure(figsize=(10, 6))
             plt.plot(reward_history, label="Total Reward per Episode")
             plt.xlabel("Episode")
@@ -264,6 +289,7 @@ def main():
                 plt.savefig(f"reward_trend_average.png")
                 plt.close()
 
+            # Plot epsilon decay
             plt.figure(figsize=(10, 6))
             plt.plot(epsilon_history, label="Epsilon Decay")
             plt.xlabel("Episode")
@@ -274,6 +300,7 @@ def main():
             plt.savefig(f"epsilon_decay.png")
             plt.close()
 
+            # Plot loss trend
             plt.figure(figsize=(10, 6))
             plt.plot(agent.loss_history, label="Loss History")
             plt.xlabel("Training Steps")
@@ -283,10 +310,30 @@ def main():
             plt.grid()
             plt.savefig(f"loss_trend.png")
             plt.close()
+            
+            window_size = 10
+            if len(power_history) >= window_size:
+                # Plot power, QoS, PRB breakdown averaged per episode
+                avg_power = np.convolve(power_history, np.ones(window_size) / window_size, mode="valid")
+                avg_qos = np.convolve(qos_history, np.ones(window_size) / window_size, mode="valid")
+                avg_prb = np.convolve(prb_history, np.ones(window_size) / window_size, mode="valid")
 
-            if (episode + 1) % 100 == 0:  # Save models every 100 episodes
-                save_models(agent, episode)
+                avg_episodes = np.arange(len(avg_power))  # Ensure same length
 
+                plt.figure(figsize=(10, 6))
+                plt.plot(avg_episodes, avg_power, label="Average Power (per 10 episodes)", marker="o")
+                plt.plot(avg_episodes, avg_qos, label="Average QoS (per 10 episodes)", marker="o")
+                plt.plot(avg_episodes, avg_prb, label="Average PRB (per 10 episodes)", marker="o")
+                plt.xlabel("Episode")
+                plt.ylabel("Average Value")
+                plt.title("Power, QoS, PRB Breakdown Over Episodes (Averaged Every 10)")
+                plt.legend()
+                plt.grid()
+                plt.savefig(f"reward_breakdown_average.png")
+                plt.close()
+
+        save_models(agent, n_episodes)
+        print("Models saved successfully.")
         env.close()
         time.sleep(2.0)
         
