@@ -441,8 +441,8 @@ private:
   // Reward component weights
 	// const double m_w_ee = 0.4;    // Energy Efficiency weight
 	const double m_w_power = 0.3; // Power consumption weight
-	const double m_w_qos = 0.5;   // QoS weight
-	const double m_w_prb = 0.2;   // PRB deviation weight
+	const double m_w_qos = 0.4;   // QoS weight
+	const double m_w_prb = 0.3;   // PRB deviation weight
 
 	// Scaling parameters for EE
 	// const double m_ee_target = 0.4;      // Target EE in Mbps/W
@@ -453,12 +453,12 @@ private:
 	const double m_power_poor = 40;    // Poor power consumption (35)
 
 	// QoS thresholds (RSRP in dBm)
-	const double m_rsrp_excellent = -50.0;  // Excellent signal strength (-40)
-	const double m_rsrp_poor = -80.0;      // Poor signal strength (-70)
+	const double m_rsrp_excellent = -45.0;  // Excellent signal strength (-40)
+	const double m_rsrp_poor = -75.0;      // Poor signal strength (-70)
 
 	// PRB deviation targets
-	const double m_prb_excellent = 20;   // Excellent PRB Deviation (10)
-	const double m_prb_poor = 40;   // Poor PRB Deviation (20)
+	const double m_prb_excellent = 8;   // Excellent PRB Deviation (10)
+	const double m_prb_poor = 20;   // Poor PRB Deviation (20)
 
 
   // Action bounds
@@ -796,7 +796,7 @@ void LteGymEnv::CalculateState()
 	m_prbUtilization[i] = CalculatePrbUtilization(enb);
 	
 	// Calculate throughput
-	m_throughput[i] = CalculateEnbThroughput(enb);
+	// m_throughput[i] = CalculateEnbThroughput(enb);
   }
 }
 
@@ -884,11 +884,14 @@ double LteGymEnv::CalculatePrbDeviation()
 int main(int argc, char *argv[]) {
 	double simTime = 60;
 	int numEnb = 3;  
-	int numUes = 20;
+	int numUes = 30;
 	double minSpeed = 1.0;
 	double maxSpeed = 3.0;
 	double pathLossExponent = 3.5;
-	double maxLength = 500.0; //length of simulation environment
+	double intersiteDistance = 250;
+	double width = intersiteDistance*4;
+	double height = intersiteDistance*2;
+	// double maxLength = 1000.0;
 	double powerOptions[] = {20.0, 30.0, 40.0}; // Power options for eNBs
 	double cioOptions[] = {-10.0, 0.0, 10.0}; // CIO options for eNBs
 
@@ -923,20 +926,32 @@ int main(int argc, char *argv[]) {
 	Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(30.0));
 	Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(23.0));
 
-	// Setup mobility for eNBs
+	// Setup mobility for eNBs randomly
+	// MobilityHelper enbMobility;
+	// enbMobility.SetPositionAllocator("ns3::RandomBoxPositionAllocator",
+	// 								"X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(maxLength) + "]"),
+	// 								"Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(maxLength) + "]"),
+	// 								"Z", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+	// enbMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+	// enbMobility.Install(enbNodes);
+
+	// Setup fixed positions for eNBs, 500 meters apart
+	// Setup fixed positions for eNBs at (0,250), (500,250), and (1000,250)
+	Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
+	enbPositionAlloc->Add(Vector(intersiteDistance, height/2, 0.0));
+	enbPositionAlloc->Add(Vector(intersiteDistance*2, height/2, 0.0));
+	enbPositionAlloc->Add(Vector(intersiteDistance*3, height/2, 0.0));
+
 	MobilityHelper enbMobility;
-	enbMobility.SetPositionAllocator("ns3::RandomBoxPositionAllocator",
-									"X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(maxLength) + "]"),
-									"Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(maxLength) + "]"),
-									"Z", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
+	enbMobility.SetPositionAllocator(enbPositionAlloc);
 	enbMobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
 	enbMobility.Install(enbNodes);
 
 	// Setup mobility for UEs
 	MobilityHelper ueMobility;
 	ueMobility.SetPositionAllocator("ns3::RandomBoxPositionAllocator",
-								   "X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(maxLength) + "]"),
-								   "Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(maxLength) + "]"),
+								   "X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(width) + "]"),
+								   "Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(height) + "]"),
 								   "Z", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
 	ueMobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
 	ueMobility.Install(ueNodes);
@@ -1064,7 +1079,7 @@ int main(int argc, char *argv[]) {
 	Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowHelper.GetClassifier());
 	// Start the throughput calculation function
 	// Schedule the first throughput calculation
-	Simulator::Schedule(Seconds(1.0), &CalculateThroughput, flowMonitor, classifier, ueIpIface);
+	// Simulator::Schedule(Seconds(1.0), &CalculateThroughput, flowMonitor, classifier, ueIpIface);
 	Simulator::Schedule(Seconds(0.5), &WaitForSetupAndTriggerHandover, lteHelper, epcHelper, ueNodes, enbDevs, ueDevs, pathLossExponent);
 
 	//calculatePBU

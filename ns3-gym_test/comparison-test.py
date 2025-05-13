@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random
 from scipy.stats import ttest_rel
+from scipy.ndimage import gaussian_filter1d
 
 N_AGENTS = 3
 POWER_EXCELLENT_THRESHOLD = None # Will pass in from ns3gym extra info
@@ -14,6 +15,17 @@ QOS_EXCELLENT_THRESHOLD = None
 QOS_POOR_THRESHOLD = None
 PRB_EXCELLENT_THRESHOLD = None
 PRB_POOR_THRESHOLD = None
+
+def smooth_data(data, sigma=2):
+    """Apply Gaussian smoothing to the data."""
+    return gaussian_filter1d(data, sigma=sigma)
+
+def summarize(label, rewards, powers, qos, prb):
+    print(f"\n--- Summary for {label} ---")
+    print(f"Average Reward: {np.mean(rewards):.4f}")
+    print(f"Average Power:  {np.mean(powers):.4f}")
+    print(f"Average QoS:    {np.mean(qos):.4f}")
+    print(f"Average PRB:    {np.mean(prb):.4f}")
 
 class SingleAgent:
     def __init__(self, model_path, action_size=9):
@@ -82,15 +94,15 @@ def run_simulation(agents=None, fixed_action=None, seed=None, num_steps=100):
 
 def main():
     model_paths = [
-        "saved_models/enb_0_main_model_episode_899",
-        "saved_models/enb_1_main_model_episode_899",
-        "saved_models/enb_2_main_model_episode_899"
+        "saved_models/enb_0_main_model_episode_200",
+        "saved_models/enb_1_main_model_episode_200",
+        "saved_models/enb_2_main_model_episode_200"
     ]
     
     agents = [SingleAgent(model_path) for model_path in model_paths]
-    fixed_action_low = [20, -10] # power=20, cio=-10
+    fixed_action_low = [20, 0] # power=20, cio=0
     fixed_action_mid = [30, 0]  
-    fixed_action_high = [40, 10]
+    fixed_action_high = [40, 0]
     
     num_iterations = 50
     avg_rewards_history_model = []
@@ -143,26 +155,43 @@ def main():
         prb_history_high.append(avg_prb_high)
 
         # Plot comparison graph
+
+        # --- Average Reward Comparison ---
         plt.figure(figsize=(10, 6))
-        plt.plot(avg_rewards_history_model, label="Trained Model", color="blue")
-        plt.plot(avg_rewards_history_low, label="Fixed Action (Power=20, CIO=-10)", color="yellow")
-        plt.plot(avg_rewards_history_mid, label="Fixed Action (Power=30, CIO=0)", color="orange")
-        plt.plot(avg_rewards_history_high, label="Fixed Action (Power=40, CIO=10)", color="purple")
+        plt.plot(avg_rewards_history_model, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(avg_rewards_history_model), label="Trained Model", color="blue")
+
+        plt.plot(avg_rewards_history_low, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(avg_rewards_history_low), label="Fixed Action (Power=20)", color="yellow")
+
+        plt.plot(avg_rewards_history_mid, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(avg_rewards_history_mid), label="Fixed Action (Power=30)", color="orange")
+
+        plt.plot(avg_rewards_history_high, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(avg_rewards_history_high), label="Fixed Action (Power=40)", color="purple")
+
         plt.xlabel("Iterations")
         plt.ylabel("Average Reward")
         plt.title("Comparison of Trained Model vs Fixed Action")
         plt.legend()
         plt.grid()
-        image_path = "avg_reward_comparison.png"
-        plt.savefig(image_path)
-        print(f"Graph saved as {image_path}")
+        plt.savefig("avg_reward_comparison.png")
+        print("Graph saved as avg_reward_comparison.png")
 
-        # Plot power comparison graph
+        # --- Power Consumption Comparison ---
         plt.figure(figsize=(10, 6))
-        plt.plot(power_history_model, label="Trained Model Power Consumption", color="blue")
-        plt.plot(power_history_low, label="Fixed Action Power Consumption (Power=20, CIO=-10)", color="yellow")
-        plt.plot(power_history_mid, label="Fixed Action Power Consumption (Power=30, CIO=0)", color="orange")
-        plt.plot(power_history_high, label="Fixed Action Power Consumption (Power=40, CIO=10)", color="purple")
+        plt.plot(power_history_model, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(power_history_model), label="Trained Model Power Consumption", color="blue")
+
+        plt.plot(power_history_low, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(power_history_low), label="Fixed Action Power Consumption (Power=20)", color="yellow")
+
+        plt.plot(power_history_mid, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(power_history_mid), label="Fixed Action Power Consumption (Power=30)", color="orange")
+
+        plt.plot(power_history_high, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(power_history_high), label="Fixed Action Power Consumption (Power=40)", color="purple")
+
         plt.axhline(y=POWER_EXCELLENT_THRESHOLD, color='green', linestyle='--', label='Excellent Threshold')
         plt.axhline(y=POWER_POOR_THRESHOLD, color='red', linestyle='--', label='Poor Threshold')
         plt.xlabel("Iterations")
@@ -170,33 +199,47 @@ def main():
         plt.title("Comparison of Power Consumption: Trained Model vs Fixed Action")
         plt.legend()
         plt.grid()
-        image_path = "power_comparison.png"
-        plt.savefig(image_path)
-        print(f"Graph saved as {image_path}")
+        plt.savefig("power_comparison.png")
+        print("Graph saved as power_comparison.png")
 
-        # Plot QoS comparison graph
+        # --- QoS Comparison ---
         plt.figure(figsize=(10, 6))
-        plt.plot(qos_history_model, label="Trained Model QoS", color="blue")
-        plt.plot(qos_history_low, label="Fixed Action QoS (Power=20, CIO=-10)", color="yellow")
-        plt.plot(qos_history_mid, label="Fixed Action QoS (Power=30, CIO=0)", color="orange")
-        plt.plot(qos_history_high, label="Fixed Action QoS (Power=40, CIO=10)", color="purple")
-        plt.xlabel("Iterations")
-        plt.ylabel("Average QoS (RSRP)")
+        plt.plot(qos_history_model, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(qos_history_model), label="Trained Model QoS", color="blue")
+
+        plt.plot(qos_history_low, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(qos_history_low), label="Fixed Action QoS (Power=20)", color="yellow")
+
+        plt.plot(qos_history_mid, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(qos_history_mid), label="Fixed Action QoS (Power=30)", color="orange")
+
+        plt.plot(qos_history_high, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(qos_history_high), label="Fixed Action QoS (Power=40)", color="purple")
+
         plt.axhline(y=QOS_EXCELLENT_THRESHOLD, color='green', linestyle='--', label='Excellent Threshold')
         plt.axhline(y=QOS_POOR_THRESHOLD, color='red', linestyle='--', label='Poor Threshold')
+        plt.xlabel("Iterations")
+        plt.ylabel("Average QoS (RSRP)")
         plt.title("Comparison of QoS: Trained Model vs Fixed Action")
         plt.legend()
         plt.grid()
-        image_path = "qos_comparison.png"
-        plt.savefig(image_path)
-        print(f"Graph saved as {image_path}")
+        plt.savefig("qos_comparison.png")
+        print("Graph saved as qos_comparison.png")
 
-        # Plot PRB comparison graph
+        # --- PRB Deviation Comparison ---
         plt.figure(figsize=(10, 6))
-        plt.plot(prb_history_model, label="Trained Model PRB", color="blue")
-        plt.plot(prb_history_low, label="Fixed Action PRB (Power=20, CIO=-10)", color="yellow")
-        plt.plot(prb_history_mid, label="Fixed Action PRB (Power=30, CIO=0)", color="orange")
-        plt.plot(prb_history_high, label="Fixed Action PRB (Power=40, CIO=10)", color="purple")
+        plt.plot(prb_history_model, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(prb_history_model), label="Trained Model PRB", color="blue")
+
+        plt.plot(prb_history_low, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(prb_history_low), label="Fixed Action PRB (Power=20)", color="yellow")
+
+        plt.plot(prb_history_mid, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(prb_history_mid), label="Fixed Action PRB (Power=30)", color="orange")
+
+        plt.plot(prb_history_high, color="lightgray", alpha=0.3)
+        plt.plot(smooth_data(prb_history_high), label="Fixed Action PRB (Power=40)", color="purple")
+
         plt.axhline(y=PRB_EXCELLENT_THRESHOLD, color='green', linestyle='--', label='Excellent Threshold')
         plt.axhline(y=PRB_POOR_THRESHOLD, color='red', linestyle='--', label='Poor Threshold')
         plt.xlabel("Iterations")
@@ -204,9 +247,13 @@ def main():
         plt.title("Comparison of PRB Deviation: Trained Model vs Fixed Action")
         plt.legend()
         plt.grid()
-        image_path = "prb_comparison.png"
-        plt.savefig(image_path)
-        print(f"Graph saved as {image_path}")
+        plt.savefig("prb_comparison.png")
+        print("Graph saved as prb_comparison.png")
+
+    summarize("Trained Model", avg_rewards_history_model, power_history_model, qos_history_model, prb_history_model)
+    summarize("Fixed Action (20)", avg_rewards_history_low, power_history_low, qos_history_low, prb_history_low)
+    summarize("Fixed Action (30)", avg_rewards_history_mid, power_history_mid, qos_history_mid, prb_history_mid)
+    summarize("Fixed Action (40)", avg_rewards_history_high, power_history_high, qos_history_high, prb_history_high)
 
 if __name__ == "__main__":
     main()

@@ -12,6 +12,11 @@ from collections import deque
 import random
 import time
 import matplotlib.pyplot as plt
+from scipy.ndimage import gaussian_filter1d
+
+def smooth_data(data, sigma=2):
+    """Apply Gaussian smoothing to the data."""
+    return gaussian_filter1d(data, sigma=sigma)
 
 class SingleDDQNAgent:
     def __init__(self, state_size):
@@ -25,7 +30,7 @@ class SingleDDQNAgent:
         self.gamma = 0.95    
         self.epsilon = 1.0   
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.999966714 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
+        self.epsilon_decay = 0.9997 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
         self.learning_rate = 0.001 # 0.001
         self.update_target_frequency = 1000 #500
         self.batch_size = 64
@@ -200,7 +205,7 @@ def main():
         num_enbs = 3
         agent = IndependentDDQNAgent(state_size, num_enbs)
         
-        n_episodes = 900
+        n_episodes = 200
         max_steps = 100
         reward_history = []
         epsilon_history = []
@@ -265,29 +270,16 @@ def main():
 
             # Plotting reward trend
             plt.figure(figsize=(10, 6))
-            plt.plot(reward_history, label="Total Reward per Episode")
+            plt.plot(reward_history, "lightgray", alpha=0.3)
+            smoothed_reward = smooth_data(reward_history)
+            plt.plot(smoothed_reward, label="Smoothed Total Reward")
             plt.xlabel("Episode")
-            plt.ylabel("Total Reward")
+            plt.ylabel("Average Total Reward")
             plt.title("Reward Trend Over Episodes")
             plt.legend()
             plt.grid()
-            plt.savefig(f"reward_trend.png")
+            plt.savefig(f"reward_trend_average.png")
             plt.close()
-
-            # Compute moving average of total rewards over every 10 episodes
-            window_size = 10
-            if len(reward_history) >= window_size:
-                avg_rewards = np.convolve(reward_history, np.ones(window_size) / window_size, mode="valid")
-                avg_episodes = np.arange(len(avg_rewards))  # Ensure same length
-                plt.figure(figsize=(10, 6))
-                plt.plot(avg_episodes, avg_rewards, label="Average Reward (per 10 episodes)", marker="o")
-                plt.xlabel("Episode")
-                plt.ylabel("Average Total Reward")
-                plt.title("Reward Trend Over Episodes (Averaged Every 10)")
-                plt.legend()
-                plt.grid()
-                plt.savefig(f"reward_trend_average.png")
-                plt.close()
 
             # Plot epsilon decay
             plt.figure(figsize=(10, 6))
@@ -311,26 +303,24 @@ def main():
             plt.savefig(f"loss_trend.png")
             plt.close()
             
-            window_size = 10
-            if len(power_history) >= window_size:
-                # Plot power, QoS, PRB breakdown averaged per episode
-                avg_power = np.convolve(power_history, np.ones(window_size) / window_size, mode="valid")
-                avg_qos = np.convolve(qos_history, np.ones(window_size) / window_size, mode="valid")
-                avg_prb = np.convolve(prb_history, np.ones(window_size) / window_size, mode="valid")
 
-                avg_episodes = np.arange(len(avg_power))  # Ensure same length
-
-                plt.figure(figsize=(10, 6))
-                plt.plot(avg_episodes, avg_power, label="Average Power (per 10 episodes)", marker="o")
-                plt.plot(avg_episodes, avg_qos, label="Average QoS (per 10 episodes)", marker="o")
-                plt.plot(avg_episodes, avg_prb, label="Average PRB (per 10 episodes)", marker="o")
-                plt.xlabel("Episode")
-                plt.ylabel("Average Value")
-                plt.title("Power, QoS, PRB Breakdown Over Episodes (Averaged Every 10)")
-                plt.legend()
-                plt.grid()
-                plt.savefig(f"reward_breakdown_average.png")
-                plt.close()
+            plt.figure(figsize=(10, 6))
+            plt.plot(power_history, "lightgray", alpha=0.3)
+            plt.plot(qos_history, "lightgray", alpha=0.3)
+            plt.plot(prb_history, "lightgray", alpha=0.3)
+            smoothed_avg_power = smooth_data(power_history)
+            smoothed_avg_qos = smooth_data(qos_history)
+            smoothed_avg_prb = smooth_data(prb_history)
+            plt.plot(smoothed_avg_power, label="Smoothed Average Power")
+            plt.plot(smoothed_avg_qos, label="Smoothed Average QoS")
+            plt.plot(smoothed_avg_prb, label="Smoothed Average PRB")
+            plt.xlabel("Episode")
+            plt.ylabel("Average Value")
+            plt.title("Power, QoS, PRB Breakdown Over Episodes")
+            plt.legend()
+            plt.grid()
+            plt.savefig(f"reward_breakdown_average.png")
+            plt.close()
 
         save_models(agent, n_episodes)
         print("Models saved successfully.")
