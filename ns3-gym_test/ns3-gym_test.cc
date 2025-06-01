@@ -522,12 +522,12 @@ std::string LteGymEnv::GetExtraInfo()
         << ",Power(Scaled):" << r_power
         << ",QoS(Scaled):" << r_qos
         << ",PRB(Scaled):" << r_prb
-        << ",Power_excellent_threshold:" << m_power_excellent
-        << ",Power_poor_threshold:" << m_power_poor
-        << ",QoS_excellent_threshold:" << m_rsrp_excellent
-        << ",QoS_poor_threshold:" << m_rsrp_poor
-        << ",PRB_excellent_threshold:" << m_prb_excellent
-        << ",PRB_poor_threshold:" << m_prb_poor
+        << ",Power_excellent_threshold:" << 25
+        << ",Power_poor_threshold:" << 35
+        << ",QoS_excellent_threshold:" << -60
+        << ",QoS_poor_threshold:" << -100
+        << ",PRB_excellent_threshold:" << 15
+        << ",PRB_poor_threshold:" << 30
         ;
 
     return oss.str();

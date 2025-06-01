@@ -30,7 +30,7 @@ class SingleDDQNAgent:
         self.gamma = 0.95    
         self.epsilon = 1.0   
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.9997 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
+        self.epsilon_decay = 0.999 # 0.9995 use (min_epsilon/initial_epsilon)^(1/decay_steps) to find the decay rate, better to drop to minimum at 75% of training step
         self.learning_rate = 0.001 # 0.001
         self.update_target_frequency = 1000 #500
         self.batch_size = 64
@@ -205,7 +205,7 @@ def main():
         num_enbs = 3
         agent = IndependentDDQNAgent(state_size, num_enbs)
         
-        n_episodes = 200
+        n_episodes = 300
         max_steps = 100
         reward_history = []
         epsilon_history = []
